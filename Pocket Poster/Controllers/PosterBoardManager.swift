@@ -40,63 +40,56 @@ class PosterBoardManager: ObservableObject {
             langManager = obj
         }
         
-        if let success = langManager.perform(Selector(("setLanguage:")), with: new_lang) {
-            return success != nil
-        }
-        
-        return false
+        let success = langManager.perform(Selector(("setLanguage:")), with: new_lang)
+        return success != nil
     }
     
     func openPosterBoard() -> Bool {
         guard let obj = objc_getClass("LSApplicationWorkspace") as? NSObject else { return false }
         let workspace = obj.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject
         
-        if let success = workspace?.perform(Selector(("openApplicationWithBundleID:")), with: "com.apple.PosterBoard") {
-            return success != nil
-        }
-        
-        return false
+        let success = workspace?.perform(Selector(("openApplicationWithBundleID:")), with: "com.apple.PosterBoard")
+        return success != nil
     }
     
-    private func unzipFile(at url: URL) throws -> URL {
-        let fileName = url.deletingPathExtension().lastPathComponent
+    private func unzipFile(at sourceUrl: URL) throws -> URL {
+        let fileName = sourceUrl.deletingPathExtension().lastPathComponent
         // Replace spaces and %20 with underscores
         let normalizedFileName = fileName.replacingOccurrences(of: "[ \\%20]", with: "_", options: .regularExpression)
-        let fileData = try Data(contentsOf: url)
-        let fileManager = FileManager()
+        let fileData = try Data(contentsOf: sourceUrl)
+        let fileManager = FileManager.default
 
         // Write the file to the Documents Directory
         let path = SymHandler.getDocumentsDirectory().appendingPathComponent("UnzipItems", conformingTo: .directory).appendingPathComponent(UUID().uuidString)
-        if !FileManager.default.fileExists(atPath: path.path()) {
-            try? FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        if !fileManager.fileExists(atPath: path.path()) {
+            try? fileManager.createDirectory(at: path, withIntermediateDirectories: true)
         }
-        let url = path.appending(path: fileName)
+        
+        // 【核心修复1】避免重复声明名为 'url' 的变量
+        let savedFileUrl = path.appendingPathComponent(normalizedFileName)
 
         // Remove All files in this directory
-        let existingFiles = try FileManager.default.contentsOfDirectory(at: path, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
-        for fileUrl in existingFiles
-        {
-            try FileManager.default.removeItem(at: fileUrl)
+        let existingFiles = try fileManager.contentsOfDirectory(at: path, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
+        for fileUrl in existingFiles {
+            try fileManager.removeItem(at: fileUrl)
         }
-        let url = path.appending(path: normalizedFileName)
 
         // Save our Zip file
-        try fileData.write(to: url, options: [.atomic])
+        try fileData.write(to: savedFileUrl, options: [.atomic])
 
         // Unzip the Zipped Up File
         var destinationURL = path
-        if FileManager.default.fileExists(atPath: url.path())
-        {
-            destinationURL.append(path: "directory")
-            try fileManager.unzipItem(at: url, to: destinationURL)
+        if fileManager.fileExists(atPath: savedFileUrl.path()) {
+            destinationURL.appendPathComponent("directory")
+            try fileManager.unzipItem(at: savedFileUrl, to: destinationURL)
         }
 
         return destinationURL
     }
     
     func runShortcut(named name: String) {
-        guard let urlEncodedName = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "shortcuts://run-shortcut?name=\(name)") else { return }
+        // 【核心修复2】移除未使用且产生警告的 urlEncodedName，直接使用安全的构造方式
+        guard let url = URL(string: "shortcuts://run-shortcut?name=\(name)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "") else { return }
         UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
     
@@ -105,7 +98,7 @@ class PosterBoardManager: ObservableObject {
             let fileName = dir.lastPathComponent
             if fileName.lowercased() == "container" {
                 // container support, find the extensions
-                let extDir = dir.appending(path: "Library/Application Support/PRBPosterExtensionDataStore/61/Extensions")
+                let extDir = dir.appendingPathComponent("Library/Application Support/PRBPosterExtensionDataStore/61/Extensions")
                 var retList: [String: [URL]] = [:]
                 for ext in try FileManager.default.contentsOfDirectory(at: extDir, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
                     let descrDir = ext.appendingPathComponent("descriptors")
@@ -128,25 +121,20 @@ class PosterBoardManager: ObservableObject {
         let randomizedID = Int.random(in: 9999...99999)
         var files = [URL]()
         if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) {
-            for case let fileURL as URL in enumerator
-            {
-                do
-                {
+            for case let fileURL as URL in enumerator {
+                do {
                     let fileAttributes = try fileURL.resourceValues(forKeys:[.isRegularFileKey])
-                    if fileAttributes.isRegularFile!
-                    {
+                    if fileAttributes.isRegularFile! {
                         files.append(fileURL)
                     }
                 }
-                catch
-                {
+                catch {
                     print(error, fileURL)
                 }
             }
         }
         
         func setPlistValue(file: String, key: String, value: Any, recursive: Bool = true) {
-            // thanks gpt
             guard let plistData = FileManager.default.contents(atPath: file),
                   var plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil) as? [String: Any] else {
                 return
@@ -182,7 +170,6 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【修改点】移除了 appHash 参数
     func applyTendies() throws {
         // organize the descriptors into their respective extensions
         var extList: [String: [URL]] = [:]
@@ -203,7 +190,11 @@ class PosterBoardManager: ObservableObject {
                 }
             }
         }
-        UIApplication.shared.change(title: NSLocalizedString("Applying Wallpapers...", comment: ""), body: NSLocalizedString("Extracting tendies...", comment: "happens when unzipping the files"))
+        
+        DispatchQueue.main.async {
+            UIApplication.shared.change(title: NSLocalizedString("Applying Wallpapers...", comment: ""), body: NSLocalizedString("Extracting tendies...", comment: "happens when unzipping the files"))
+        }
+        
         for url in selectedTendies {
             let unzippedDir = try unzipFile(at: url)
             guard let descriptors = try getDescriptorsFromTendie(unzippedDir) else { continue } // TODO: Add error handling
@@ -215,7 +206,6 @@ class PosterBoardManager: ObservableObject {
         }
         
         for (ext, descriptorsList) in extList {
-            // 【修改点】直接传入 com.apple.PosterBoard 即可，不再需要 appHash
             let _ = try SymHandler.createDescriptorsSymlink(bundleID: "com.apple.PosterBoard", ext: ext)
             for descriptors in descriptorsList {
                 // create the folder
@@ -224,7 +214,6 @@ class PosterBoardManager: ObservableObject {
                         try randomizeWallpaperId(url: descr)
                         let newURL = SymHandler.getDocumentsDirectory().appendingPathComponent(UUID().uuidString, conformingTo: .directory)
                         try FileManager.default.moveItem(at: descr, to: newURL)
-                        
                         try FileManager.default.trashItem(at: newURL, resultingItemURL: nil)
                     }
                 }
@@ -238,8 +227,6 @@ class PosterBoardManager: ObservableObject {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.lastPathComponent))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
-        
-        // 【关键点】写入完毕后，我们可以在这里直接调用刷新逻辑（详见下方第三部分的解答）
     }
     
     static func clearCache() throws {
