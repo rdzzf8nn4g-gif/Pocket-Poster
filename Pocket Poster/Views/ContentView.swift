@@ -54,7 +54,7 @@ struct ContentView: View {
                     }
                 }
                 
-                // 【新增核心功能块】自动识别并展现系统现存的所有导入壁纸，允许随时独立解绑删除
+                // 系统内现有已导入壁纸的管理分区
                 if !pbManager.appliedWallpapers.isEmpty {
                     Section {
                         ForEach(pbManager.appliedWallpapers) { wallpaper in
@@ -71,14 +71,13 @@ struct ContentView: View {
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                     do {
-                                        // 执行物理文件剔除
+                                        // 1. 原生删除物理文件
                                         try self.pbManager.deleteAppliedWallpaper(wallpaper)
                                         Haptic.shared.notify(.success)
                                         
-                                        // 【删除后实时生效机制】利用Pocket Poster自带的语系快速切换黑科技强制使PosterBoard重载缓存
-                                        if let lang = UserDefaults.standard.stringArray(forKey: "AppleLanguages")?.first {
-                                            _ = self.pbManager.setSystemLanguage(to: lang)
-                                        }
+                                        // 2. 【核心改进】立即对系统壁纸进程实施冷启动重启，秒级剔除空白项并实时生效
+                                        self.pbManager.refreshPosterBoardSystem()
+                                        
                                     } catch {
                                         UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
                                     }
@@ -90,7 +89,7 @@ struct ContentView: View {
                             }
                         }
                     } header: {
-                        Label("检测到系统已存在的壁纸 (点击可单独删除并生效)", systemImage: "photo.stack.fill")
+                        Label("检测到系统已存在的壁纸 (可单独删除并实时生效)", systemImage: "photo.stack.fill")
                     }
                 }
                 
@@ -109,19 +108,12 @@ struct ContentView: View {
                                         
                                         DispatchQueue.main.async {
                                             UIApplication.shared.dismissAlert(animated: false)
-                                        }
-                                        
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: {
                                             self.pbManager.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
-                                            UIApplication.shared.confirmAlert(title: NSLocalizedString("Success!", comment: ""), body: NSLocalizedString("The PosterBoard app will now open. Please close it from the app switcher.", comment: ""), onOK: {
-                                                if !self.pbManager.openPosterBoard() {
-                                                    UIApplication.shared.confirmAlert(title: NSLocalizedString("Falling Back to Shortcut", comment: ""), body: NSLocalizedString("PosterBoard failed to open directly. The fallback shortcut will now be opened.", comment: ""), onOK: {
-                                                        self.pbManager.runShortcut(named: "PosterBoard")
-                                                    }, noCancel: true)
-                                                }
-                                            }, noCancel: true)
-                                        })
+                                            
+                                            // 3. 【核心改进】壁纸导入成功后，不再弹窗干预，直接强刷系统守护进程，让新导入的壁纸即刻刷新显示
+                                            self.pbManager.refreshPosterBoardSystem()
+                                        }
                                     } catch CocoaError.fileWriteUnknown {
                                         self.presentError(ApplyError.wrongAppHash)
                                     } catch CocoaError.fileWriteFileExists {
@@ -201,7 +193,6 @@ struct ContentView: View {
                 .animation(.easeOut(duration: 0.5), value: hideResetHelp)
         }
         .onAppear {
-            // 打开主界面时，自动刷新并识别已经安装过的系统壁纸列表
             pbManager.fetchAppliedWallpapers()
         }
     }
