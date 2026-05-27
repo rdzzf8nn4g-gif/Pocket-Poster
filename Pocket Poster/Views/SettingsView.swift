@@ -9,51 +9,12 @@ import SwiftUI
 
 struct SettingsView: View {
     // Prefs
-    @AppStorage("pbHash") var pbHash: String = "" // PosterBoard hash
-    @AppStorage("cpHash") var cpHash: String = "" // CarPlay hash
     @AppStorage("ignoreDurationLimit") var ignoreDurationLimit: Bool = false
-    
-    @State var checkingForHash: Bool = false
-    @State var hashCheckTask: Task<Void, any Error>? = nil
     
     var body: some View {
         List {
-            Section {
-                VStack {
-                    TextField("Enter PosterBoard App Hash", text: $pbHash)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .font(.system(.body, design: .monospaced))
-                    if CarPlayManager.supportsCarPlay() {
-                        TextField("Enter CarPlayWallpaper App Hash", text: $cpHash)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .font(.system(.body, design: .monospaced))
-                    }
-                    HStack {
-                        Spacer()
-                        // Run task to check until file exists from Nugget pc over AFC
-                        Button(action: {
-                            if !FileManager.default.fileExists(atPath: SymHandler.getPosterBoardHashURL().path()) {
-                                // don't show the alert because it is already there
-                                UIApplication.shared.confirmAlert(title: NSLocalizedString("Waiting for app hash...", comment: ""), body: NSLocalizedString("Connect your device to Nugget and click the \"Pocket Poster Helper\" button.", comment: ""), confirmTitle: NSLocalizedString("Cancel", comment: ""), onOK: {
-                                    cancelWaitForHash()
-                                }, noCancel: true)
-                            }
-                            startWaitForHash()
-                        }) {
-                            Text("Detect")
-                        }
-                        .foregroundStyle(.green)
-                        .onChange(of: checkingForHash) { _ in
-                            if !checkingForHash {
-                                // hide ui alert
-                                UIApplication.shared.dismissAlert(animated: true)
-                            }
-                        }
-                    }
-                }
-            } header: {
-                Label("App Hash", systemImage: "lock.app.dashed")
-            }
+            // 【核心修复】由于当前项目已完全采用更先进的通过 TrollStore API 动态获取 App 容器路径技术，
+            // 故此处已彻底移除此前失效且导致项目完全无法编译通过的 "App Hash" 配置段落及函数逻辑。
             
             Section {
                 Toggle(isOn: $ignoreDurationLimit, label: {
@@ -148,48 +109,5 @@ struct SettingsView: View {
                 Label("Credits", systemImage: "wrench.and.screwdriver")
             }
         }
-    }
-    
-    func startWaitForHash() {
-        checkingForHash = true
-        hashCheckTask = Task {
-            let filePath = SymHandler.getPosterBoardHashURL()
-            while !FileManager.default.fileExists(atPath: filePath.path()) {
-                try? await Task.sleep(nanoseconds: 500_000_000) // Sleep 0.5s
-                try Task.checkCancellation()
-            }
-            
-            do {
-                let contents = try String(contentsOf: filePath)
-                try? FileManager.default.removeItem(at: filePath)
-                await MainActor.run {
-                    pbHash = contents
-                }
-                // check for carplay hash
-                if UIDevice.current.userInterfaceIdiom == .phone {
-                    let carplayPath = SymHandler.getCarPlayHashURL()
-                    if FileManager.default.fileExists(atPath: carplayPath.path()) {
-                        let carplayContents = try String(contentsOf: carplayPath)
-                        try? FileManager.default.removeItem(at: carplayPath)
-                        await MainActor.run {
-                            cpHash = carplayContents
-                        }
-                    }
-                }
-            } catch {
-                print(error.localizedDescription)
-            }
-
-            await MainActor.run {
-                checkingForHash = false
-                hashCheckTask = nil
-            }
-        }
-    }
-    
-    func cancelWaitForHash() {
-        hashCheckTask?.cancel()
-        hashCheckTask = nil
-        checkingForHash = false
     }
 }
