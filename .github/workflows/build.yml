@@ -1,7 +1,6 @@
 name: Build Pocket Poster IPA
 
 on:
- 
   workflow_dispatch: 
 
 jobs:
@@ -12,11 +11,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 【修改点】强制使用服务器目前支持的 16.4.0 版本
-      - name: Set up Xcode environment
+      # 【修改点】自动切换并使用当前系统自带的最新稳定版 Xcode 环境
+      - name: Set up latest Xcode environment
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '16.4.0' 
+          xcode-version: 'latest-stable' 
 
       - name: Make Build Script Executable
         run: chmod +x ./ipabuild.sh 
