@@ -52,7 +52,8 @@ struct CarPlayView: View {
 
                             DispatchQueue.global(qos: .userInitiated).async {
                                 do {
-                                    try CarPlayManager.applyCarPlay(appHash: cpHash, wallpapers: wallpapers)
+                                    // 【核心修复】移除旧的 appHash 参数，适配全新的无感容器注入逻辑
+                                    try CarPlayManager.applyCarPlay(wallpapers: wallpapers)
                                     SymHandler.cleanup() // just to be extra sure
                                     UIApplication.shared.dismissAlert(animated: false)
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: {
@@ -70,14 +71,9 @@ struct CarPlayView: View {
                                 }
                             }
                         }) {
-                            if cpHash == "" {
-                                Text("Enter your CarPlayWallpaper app hash in Settings.")
-                            } else {
-                                Label("Apply CarPlay Wallpapers", systemImage: "checkmark.circle")
-                            }
+                            Label("Apply CarPlay Wallpapers", systemImage: "checkmark.circle")
                         }
-                        .buttonStyle(OpaqueButton(color: cpHash == "" ? .red : .blue, fullwidth: true))
-                        .disabled(cpHash == "")
+                        .buttonStyle(OpaqueButton(color: .blue, fullwidth: true))
                         .padding(.vertical, 10)
                         .padding(.horizontal, 25)
                         .transition(.move(edge: .bottom))
