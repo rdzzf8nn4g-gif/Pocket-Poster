@@ -13,7 +13,6 @@ struct CarPlayView: View {
     @State var didChange: Bool = false
     @State var showDark: Bool = false
     
-    @AppStorage("cpHash") var cpHash: String = ""
     @State var activeWallpapers: [String] = []
     @ObservedObject var pbManager = PosterBoardManager.shared
     
@@ -52,22 +51,25 @@ struct CarPlayView: View {
 
                             DispatchQueue.global(qos: .userInitiated).async {
                                 do {
-                                    // 【核心修复】移除旧的 appHash 参数，适配全新的无感容器注入逻辑
-                                    try CarPlayManager.applyCarPlay(wallpapers: wallpapers)
+                                    try CarPlayManager.applyCarPlay(wallpapers: self.wallpapers)
                                     SymHandler.cleanup() // just to be extra sure
-                                    UIApplication.shared.dismissAlert(animated: false)
+                                    
+                                    DispatchQueue.main.async {
+                                        UIApplication.shared.dismissAlert(animated: false)
+                                    }
+                                    
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: {
-                                        activeWallpapers = UserDefaults.standard.array(forKey: "ActiveCarPlayWallpapers") as? [String] ?? []
+                                        self.activeWallpapers = UserDefaults.standard.array(forKey: "ActiveCarPlayWallpapers") as? [String] ?? []
                                         Haptic.shared.notify(.success)
                                         UIApplication.shared.alert(title: NSLocalizedString("Success!", comment: ""), body: NSLocalizedString("You can now choose your wallpapers in the CarPlay settings in your car.", comment: ""))
                                     })
                                 } catch CocoaError.fileWriteUnknown {
-                                    presentError(ApplyError.wrongAppHash)
+                                    self.presentError(ApplyError.wrongAppHash)
                                 } catch CocoaError.fileWriteFileExists {
-                                    presentError(ApplyError.collectionsNeedsReset)
+                                    self.presentError(ApplyError.collectionsNeedsReset)
                                 } catch {
                                     print(error.localizedDescription)
-                                    presentError(ApplyError.unexpected(info: error.localizedDescription))
+                                    self.presentError(ApplyError.unexpected(info: error.localizedDescription))
                                 }
                             }
                         }) {
@@ -135,7 +137,9 @@ struct CarPlayView: View {
     
     func presentError(_ error: ApplyError) {
         SymHandler.cleanup()
-        UIApplication.shared.dismissAlert(animated: false)
+        DispatchQueue.main.async {
+            UIApplication.shared.dismissAlert(animated: false)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: {
             Haptic.shared.notify(.error)
             UIApplication.shared.alert(body: error.localizedDescription)
