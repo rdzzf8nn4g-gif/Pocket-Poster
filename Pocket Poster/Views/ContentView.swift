@@ -16,9 +16,6 @@ extension UIDocumentPickerViewController {
 }
 
 struct ContentView: View {
-    // Prefs
-    @AppStorage("pbHash") var pbHash: String = ""
-    
     @ObservedObject var pbManager = PosterBoardManager.shared
     
     private let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
@@ -66,29 +63,32 @@ struct ContentView: View {
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 【核心修复】移除 appHash 参数，匹配底层的动态路径注入 API
-                                        try pbManager.applyTendies()
+                                        try self.pbManager.applyTendies()
                                         SymHandler.cleanup() // just to be extra sure
-                                        try? FileManager.default.removeItem(at: pbManager.getTendiesStoreURL())
-                                        UIApplication.shared.dismissAlert(animated: false)
+                                        try? FileManager.default.removeItem(at: self.pbManager.getTendiesStoreURL())
+                                        
+                                        DispatchQueue.main.async {
+                                            UIApplication.shared.dismissAlert(animated: false)
+                                        }
+                                        
                                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: {
-                                            pbManager.selectedTendies.removeAll()
+                                            self.pbManager.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
                                             UIApplication.shared.confirmAlert(title: NSLocalizedString("Success!", comment: ""), body: NSLocalizedString("The PosterBoard app will now open. Please close it from the app switcher.", comment: ""), onOK: {
-                                                if !pbManager.openPosterBoard() {
+                                                if !self.pbManager.openPosterBoard() {
                                                     UIApplication.shared.confirmAlert(title: NSLocalizedString("Falling Back to Shortcut", comment: ""), body: NSLocalizedString("PosterBoard failed to open directly. The fallback shortcut will now be opened.", comment: ""), onOK: {
-                                                        pbManager.runShortcut(named: "PosterBoard")
+                                                        self.pbManager.runShortcut(named: "PosterBoard")
                                                     }, noCancel: true)
                                                 }
                                             }, noCancel: true)
                                         })
                                     } catch CocoaError.fileWriteUnknown {
-                                        presentError(ApplyError.wrongAppHash)
+                                        self.presentError(ApplyError.wrongAppHash)
                                     } catch CocoaError.fileWriteFileExists {
-                                        presentError(ApplyError.collectionsNeedsReset)
+                                        self.presentError(ApplyError.collectionsNeedsReset)
                                     } catch {
                                         print(error.localizedDescription)
-                                        presentError(ApplyError.unexpected(info: error.localizedDescription))
+                                        self.presentError(ApplyError.unexpected(info: error.localizedDescription))
                                     }
                                 }
                             }) {
@@ -168,7 +168,9 @@ struct ContentView: View {
     
     func presentError(_ error: ApplyError) {
         SymHandler.cleanup()
-        UIApplication.shared.dismissAlert(animated: false)
+        DispatchQueue.main.async {
+            UIApplication.shared.dismissAlert(animated: false)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: {
             Haptic.shared.notify(.error)
             UIApplication.shared.alert(body: error.localizedDescription)
