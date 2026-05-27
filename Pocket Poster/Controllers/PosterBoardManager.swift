@@ -8,9 +8,9 @@
 import Foundation
 import ZIPFoundation
 import UIKit
-import Dynamic // 【核心引入】使用项目中已有的 Dynamic 框架调用 FrontBoard 私有控制指令
+import Dynamic
 
-// 定义已应用壁纸的数据模型
+// 已应用壁纸的数据模型
 struct AppliedWallpaper: Identifiable, Hashable {
     var id: String { path.path }
     var folderName: String
@@ -29,7 +29,7 @@ class PosterBoardManager: ObservableObject {
     
     @Published var selectedTendies: [URL] = []
     @Published var videos: [LoadInfo] = []
-    @Published var appliedWallpapers: [AppliedWallpaper] = [] // 存储识别到的系统现有壁纸
+    @Published var appliedWallpapers: [AppliedWallpaper] = [] // 存储识别到的自定壁纸
     
     func getTendiesStoreURL() -> URL {
         let tendiesStoreURL = SymHandler.getDocumentsDirectory().appendingPathComponent("KFC Bucket", conformingTo: .directory)
@@ -61,14 +61,23 @@ class PosterBoardManager: ObservableObject {
         return success != nil
     }
     
-    // 【核心新增机制】利用 TrollStore 赋能的 FrontBoard 权限，秒级热重载系统壁纸服务，彻底解决卡死和空白占位问题
+    // 【高级重载黑科技】自动化巨魔刷新缓存的底层逻辑，强制系统壁纸服务冷启动重新读取物理目录
     func refreshPosterBoardSystem() {
-        // 终止 com.apple.PosterBoard 进程，系统会自动带着干净的物理文件重新拉起它
-        Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: 1, andDescription: "Refresh Pocket Poster Cache", withOptions: nil)
-        
-        // 延迟 0.4 秒调用重新唤醒，确保 PosterBoard 界面以最新无缓存状态呈现在前台
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            _ = self.openPosterBoard()
+        DispatchQueue.global(qos: .userInitiated).async {
+            // 1. 强制终止后台强缓存进程
+            Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: 1, andDescription: "Clear Cache", withOptions: nil)
+            
+            // 2. 触发巨魔同款容器注册刷新，迫使系统服务重构 PRBPosterExtensionDataStore 数据库
+            if let workspaceClass = objc_getClass("LSApplicationWorkspace") as? NSObject.Type,
+               let workspace = workspaceClass.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject {
+                // 刷新 PosterBoard 和壁纸插件的注册状态
+                _ = workspace.perform(Selector(("pluginsNeedToBeRefreshed")))
+            }
+            
+            // 3. 重新唤醒，给系统预留重构索引的时间
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                _ = self.openPosterBoard()
+            }
         }
     }
     
@@ -170,6 +179,7 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
+    // 【核心更新】精准过滤自带壁纸，只加载通过本工具导入的第三方自定壁纸
     func fetchAppliedWallpapers() {
         var list: [AppliedWallpaper] = []
         guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") else { return }
@@ -187,6 +197,11 @@ class PosterBoardManager: ObservableObject {
                 let folderName = item.lastPathComponent
                 if folderName == "__MACOSX" { continue }
                 
+                // 【过滤自带关键点】通过排除系统原生静态及固件壁纸关键字，只保留用户追加的独立文件夹
+                if folderName.lowercased().contains("system") || folderName.lowercased().hasPrefix("migration") || folderName.count < 4 {
+                    continue
+                }
+                
                 var displayName = folderName
                 let plistURL = item.appendingPathComponent("Wallpaper.plist")
                 if FileManager.default.fileExists(atPath: plistURL.path),
@@ -197,7 +212,7 @@ class PosterBoardManager: ObservableObject {
                 } else {
                     let idURL = item.appendingPathComponent("com.apple.posterkit.provider.descriptor.identifier")
                     if let idStr = try? String(contentsOf: idURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) {
-                        displayName = "ID: \(idStr)"
+                        displayName = "自定壁纸 (ID: \(idStr))"
                     }
                 }
                 list.append(AppliedWallpaper(folderName: folderName, displayName: displayName, extensionType: extName, path: item))
@@ -211,7 +226,7 @@ class PosterBoardManager: ObservableObject {
     
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
         try FileManager.default.removeItem(at: wallpaper.path)
-        self.fetchAppliedWallpapers() // 重新同步本 App 里的列表数据
+        self.fetchAppliedWallpapers()
     }
     
     func applyTendies() throws {
@@ -277,7 +292,6 @@ class PosterBoardManager: ObservableObject {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
-        // 重新检索一次最新列表
         self.fetchAppliedWallpapers()
     }
     
