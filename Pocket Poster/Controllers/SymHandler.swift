@@ -23,15 +23,18 @@ class SymHandler {
         return getDocumentsDirectory()
     }
     
-    static func getPosterBoardHashURL() -> URL {
-        return getLCDocumentsDirectory().appendingPathComponent("NuggetPosterBoardHash")
-    }
-    static func getCarPlayHashURL() -> URL {
-        return getLCDocumentsDirectory().appendingPathComponent("NuggetCarPlayWallpaperHash")
-    }
+    // 【修改点】移除旧的写死 Hash URL 的方法，不再需要 getPosterBoardHashURL 和 getCarPlayHashURL
     
     private static func getSymlinkURL() -> URL {
         return getLCDocumentsDirectory().appendingPathComponent(".Trash", conformingTo: .symbolicLink)
+    }
+    
+    // MARK: - 核心：利用私有 API 动态获取 App 的 Data Container 路径
+    static func getAppContainerPath(for bundleID: String) -> String? {
+        guard let proxyClass = objc_getClass("LSApplicationProxy") as? NSObject.Type else { return nil }
+        guard let proxy = proxyClass.perform(Selector(("applicationProxyForIdentifier:")), with: bundleID)?.takeUnretainedValue() as? NSObject else { return nil }
+        guard let dataContainerURL = proxy.perform(Selector(("dataContainerURL")))?.takeUnretainedValue() as? URL else { return nil }
+        return dataContainerURL.path
     }
     
     // MARK: Symlink Creation
@@ -40,14 +43,19 @@ class SymHandler {
         let symURL = getSymlinkURL()
         cleanup()
         
-        // create the symlink to the hashed app folder
+        // create the symlink to the dynamic app folder
         try FileManager.default.createSymbolicLink(at: symURL, withDestinationURL: URL(fileURLWithPath: path, isDirectory: true))
         
         return symURL
     }
     
-    static func createAppSymlink(for appHash: String) throws -> URL {
-        return try createSymlink(to: "/var/mobile/Containers/Data/Application/\(appHash)")
+    // 【修改点】将原来接受 appHash 的方法，改为接受 bundleID 和 subPath
+    static func createAppSymlink(for bundleID: String, subPath: String) throws -> URL {
+        guard let containerPath = getAppContainerPath(for: bundleID) else {
+            throw NSError(domain: "SymHandler", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法获取 \(bundleID) 的沙盒路径，请确保已通过 TrollStore 安装以获取足够权限。"])
+        }
+        let fullPath = containerPath + subPath
+        return try createSymlink(to: fullPath)
     }
     
     static func getExtensionVersion() -> String {
@@ -57,11 +65,12 @@ class SymHandler {
         return "59"
     }
     
-    static func createDescriptorsSymlink(appHash: String, ext: String) throws -> URL {
-        // create a symlink directly to the descriptors
+    // 【修改点】将传入的 appHash 改为 bundleID
+    static func createDescriptorsSymlink(bundleID: String, ext: String) throws -> URL {
         let extVer = SymHandler.getExtensionVersion()
-        print("linking to \(appHash)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)/Extensions/\(ext)/descriptors")
-        return try createAppSymlink(for: "\(appHash)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)/Extensions/\(ext)/descriptors")
+        let subPath = "/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)/Extensions/\(ext)/descriptors"
+        print("linking to \(bundleID) -> \(subPath)")
+        return try createAppSymlink(for: bundleID, subPath: subPath)
     }
     
     static func cleanup() {
