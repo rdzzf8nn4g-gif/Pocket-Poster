@@ -1,0 +1,32 @@
+name: Build Pocket Poster IPA
+
+on:
+  push:
+    branches: [ "main" ] # 当推送到 main 分支时触发
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: # 允许你在 GitHub 网页上手动点击运行
+
+jobs:
+  build:
+    runs-on: macos-latest # 使用最新的 macOS 环境
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode environment
+        run: sudo xcode-select -s /Applications/Xcode_15.2.app # 指定 Xcode 版本（可根据需要修改为 15.0 等）
+
+      - name: Make Build Script Executable
+        run: chmod +x ./ipabuild.sh # 赋予你的 shell 脚本执行权限
+
+      - name: Run IPA Build Script (Release)
+        run: ./ipabuild.sh # 执行你的打包脚本，默认使用 Release 配置
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pocket-Poster-IPA # GitHub 上显示的产物名字
+          path: build/*.ipa # 抓取你的 ipabuild.sh 脚本输出的 ipa 文件
+          retention-days: 7 # 产物保留天数
