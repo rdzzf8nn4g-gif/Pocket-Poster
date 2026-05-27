@@ -8,6 +8,7 @@
 import Foundation
 import ZIPFoundation
 import UIKit
+import Dynamic // 【核心引入】使用项目中已有的 Dynamic 框架调用 FrontBoard 私有控制指令
 
 // 定义已应用壁纸的数据模型
 struct AppliedWallpaper: Identifiable, Hashable {
@@ -58,6 +59,17 @@ class PosterBoardManager: ObservableObject {
         
         let success = workspace?.perform(Selector(("openApplicationWithBundleID:")), with: "com.apple.PosterBoard")
         return success != nil
+    }
+    
+    // 【核心新增机制】利用 TrollStore 赋能的 FrontBoard 权限，秒级热重载系统壁纸服务，彻底解决卡死和空白占位问题
+    func refreshPosterBoardSystem() {
+        // 终止 com.apple.PosterBoard 进程，系统会自动带着干净的物理文件重新拉起它
+        Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: 1, andDescription: "Refresh Pocket Poster Cache", withOptions: nil)
+        
+        // 延迟 0.4 秒调用重新唤醒，确保 PosterBoard 界面以最新无缓存状态呈现在前台
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            _ = self.openPosterBoard()
+        }
     }
     
     private func unzipFile(at sourceUrl: URL) throws -> URL {
@@ -158,7 +170,6 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 核心修改点：扫描识别系统此前已经导入的所有壁纸
     func fetchAppliedWallpapers() {
         var list: [AppliedWallpaper] = []
         guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") else { return }
@@ -198,13 +209,11 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 核心修改点：单个壁纸文件的直接物理删除
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
         try FileManager.default.removeItem(at: wallpaper.path)
-        self.fetchAppliedWallpapers() // 刷新列表
+        self.fetchAppliedWallpapers() // 重新同步本 App 里的列表数据
     }
     
-    // 核心修改点：改用直写容器注入，摒弃已损坏的旧废纸篓垃圾桶机制
     func applyTendies() throws {
         var extList: [String: [URL]] = [:]
         if videos.count > 0 {
@@ -234,7 +243,6 @@ class PosterBoardManager: ObservableObject {
             extList.merge(descriptors) { (first, second) in first + second }
         }
         
-        // 利用 TrollStore 权限直接向系统壁纸沙盒目标目录写入文件
         guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") else {
             throw NSError(domain: "PosterBoardManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法定位 PosterBoard 路径，请确认 TrollStore 注入正常"])
         }
@@ -257,7 +265,6 @@ class PosterBoardManager: ObservableObject {
                             try? FileManager.default.removeItem(at: destURL)
                         }
                         
-                        // 【纯净直写】取代原先会引起报错的 moveItem -> trashItem 链条
                         try FileManager.default.moveItem(at: descr, to: destURL)
                     }
                 }
@@ -270,6 +277,7 @@ class PosterBoardManager: ObservableObject {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
+        // 重新检索一次最新列表
         self.fetchAppliedWallpapers()
     }
     
