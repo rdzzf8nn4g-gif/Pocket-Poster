@@ -53,7 +53,6 @@ class PosterBoardManager: ObservableObject {
         return success != nil
     }
     
-    // 【核心修复】回归纯 Obj-C 反射机制，完美返回 Swift 原生 Bool，彻底杜绝 Dynamic 类型报错
     func openPosterBoard() -> Bool {
         guard let obj = objc_getClass("LSApplicationWorkspace") as? NSObject else { return false }
         let workspace = obj.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject
@@ -61,20 +60,13 @@ class PosterBoardManager: ObservableObject {
         return success != nil
     }
     
-    // 【核心修复】清除引起编译错误的判空逻辑，结合原生反射实现完美重载缓存
+    // 【核心修复：彻底剔除巨魔 API 调用，仅安全终止系统守护进程防闪退】
     func refreshPosterBoardSystem() {
         DispatchQueue.global(qos: .userInitiated).async {
-            // 1. 强制终止后台强缓存进程 (Dynamic 直接链式调用，无需也不能用 != nil 判断)
+            // 安全操作：仅强杀 PosterBoard，让系统自动从物理路径安全冷启动。此调用安全稳定，不会触发 iOS 17 的 API 缺失崩溃。
             Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: 1, andDescription: "Clear Cache", withOptions: nil)
             
-            // 2. 触发巨魔同款容器注册刷新，迫使系统服务重构壁纸数据库 (使用绝对严谨的 Obj-C 反射)
-            if let workspaceClass = objc_getClass("LSApplicationWorkspace") as? NSObject.Type,
-               let workspace = workspaceClass.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject {
-                // 刷新 PosterBoard 和插件的注册状态
-                _ = workspace.perform(Selector(("pluginsNeedToBeRefreshed")))
-            }
-            
-            // 3. 延时重新唤醒，给系统重构数据库留足时间
+            // 延时 0.5 秒重新唤醒应用
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 _ = self.openPosterBoard()
             }
@@ -187,7 +179,6 @@ class PosterBoardManager: ObservableObject {
         
         guard let extensions = try? FileManager.default.contentsOfDirectory(at: extensionsPath, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else { return }
         
-        // 读取本 App 录入的自定历史追踪阵列
         let importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         
         for extFolder in extensions {
@@ -200,7 +191,6 @@ class PosterBoardManager: ObservableObject {
                 if folderName == "__MACOSX" { continue }
                 
                 let lowerFolder = folderName.lowercased()
-                // 过滤掉系统自带、固件迁移或核心原生组件的类目
                 if lowerFolder.contains("system") || lowerFolder.hasPrefix("migration") || lowerFolder.contains("apple") || folderName.count < 5 {
                     continue
                 }
@@ -214,7 +204,6 @@ class PosterBoardManager: ObservableObject {
                        let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] {
                         if let name = plist["name"] as? String {
                             displayName = name
-                            // 屏蔽系统原装的默认壁纸分类名
                             if name == "Collections" || name == "Astronomy" || name == "Emoji" || name == "Kaleidoscope" || name == "Color" {
                                 isSystemStock = true
                             }
@@ -229,7 +218,6 @@ class PosterBoardManager: ObservableObject {
                 
                 if isSystemStock { continue }
                 
-                // 只有在追踪列表里，或者文件夹不包含系统特征的才会被认作是导入的自定壁纸
                 if importedFolders.contains(folderName) || !lowerFolder.hasPrefix("com.apple") {
                     list.append(AppliedWallpaper(folderName: folderName, displayName: displayName, extensionType: extName, path: item))
                 }
@@ -244,7 +232,6 @@ class PosterBoardManager: ObservableObject {
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
         try FileManager.default.removeItem(at: wallpaper.path)
         
-        // 同步从持久化追踪列表中移除该项
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
@@ -282,7 +269,7 @@ class PosterBoardManager: ObservableObject {
         }
         
         guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") else {
-            throw NSError(domain: "PosterBoardManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法定位 PosterBoard 路径，请确认 TrollStore 注入正常"])
+            throw NSError(domain: "PosterBoardManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法定位 PosterBoard 路径"])
         }
         let extVer = SymHandler.getExtensionVersion()
         
@@ -307,7 +294,6 @@ class PosterBoardManager: ObservableObject {
                         
                         try FileManager.default.moveItem(at: descr, to: destURL)
                         
-                        // 将新导入成功的自定文件夹特征登记到追踪列表中
                         if !importedFolders.contains(descr.lastPathComponent) {
                             importedFolders.append(descr.lastPathComponent)
                         }
