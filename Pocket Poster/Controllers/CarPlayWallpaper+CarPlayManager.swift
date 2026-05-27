@@ -107,7 +107,8 @@ class CarPlayManager {
         return cppURL
     }
     
-    static func applyCarPlay(appHash: String, wallpapers: [CarPlayWallpaper]) throws {
+    // 【修改点】移除了 appHash，改为动态获取路径
+    static func applyCarPlay(wallpapers: [CarPlayWallpaper]) throws {
         // write the image
         var toRemove: [URL] = []
         var activeWP: [String] = UserDefaults.standard.array(forKey: "ActiveCarPlayWallpapers") as? [String] ?? []
@@ -135,7 +136,13 @@ class CarPlayManager {
         }
         
         // symlink and apply
-        let _ = try SymHandler.createAppSymlink(for: "\(appHash)/Library/Caches/MappedImageCache/com.apple.CarPlayApp.wallpaper-images")
+        // 【修改点】动态获取 CarPlayApp 的容器路径再拼接待写入目录
+        guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.CarPlayApp") else {
+            throw NSError(domain: "CarPlayManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to locate com.apple.CarPlayApp container path."])
+        }
+        let targetPath = "\(containerPath)/Library/Caches/MappedImageCache/com.apple.CarPlayApp.wallpaper-images"
+        let _ = try SymHandler.createSymlink(to: targetPath)
+        
         defer {
             SymHandler.cleanup()
         }
