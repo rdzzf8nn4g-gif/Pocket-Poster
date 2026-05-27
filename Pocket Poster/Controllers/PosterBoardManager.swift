@@ -182,7 +182,8 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    func applyTendies(appHash: String) throws {
+    // 【修改点】移除了 appHash 参数
+    func applyTendies() throws {
         // organize the descriptors into their respective extensions
         var extList: [String: [URL]] = [:]
         // create the video first
@@ -214,7 +215,8 @@ class PosterBoardManager: ObservableObject {
         }
         
         for (ext, descriptorsList) in extList {
-            let _ = try SymHandler.createDescriptorsSymlink(appHash: appHash, ext: ext)
+            // 【修改点】直接传入 com.apple.PosterBoard 即可，不再需要 appHash
+            let _ = try SymHandler.createDescriptorsSymlink(bundleID: "com.apple.PosterBoard", ext: ext)
             for descriptors in descriptorsList {
                 // create the folder
                 for descr in try FileManager.default.contentsOfDirectory(at: descriptors, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
@@ -236,6 +238,8 @@ class PosterBoardManager: ObservableObject {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.lastPathComponent))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
+        
+        // 【关键点】写入完毕后，我们可以在这里直接调用刷新逻辑（详见下方第三部分的解答）
     }
     
     static func clearCache() throws {
