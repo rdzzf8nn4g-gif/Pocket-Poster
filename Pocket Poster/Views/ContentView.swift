@@ -54,44 +54,7 @@ struct ContentView: View {
                     }
                 }
                 
-                // 已经通过 Tendies 导入的自定壁纸列表管理区
-                if !pbManager.appliedWallpapers.isEmpty {
-                    Section {
-                        ForEach(pbManager.appliedWallpapers) { wallpaper in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(wallpaper.displayName)
-                                        .font(.body)
-                                        .fontWeight(.medium)
-                                    Text(wallpaper.extensionType.replacingOccurrences(of: "com.apple.", with: ""))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                Button(action: {
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    do {
-                                        // 1. 删除物理壁纸文件
-                                        try self.pbManager.deleteAppliedWallpaper(wallpaper)
-                                        Haptic.shared.notify(.success)
-                                        
-                                        // 2. 自动化巨魔级系统重载，即时刷新，告别空白占位符
-                                        self.pbManager.refreshPosterBoardSystem()
-                                    } catch {
-                                        UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
-                                    }
-                                }) {
-                                    Image(systemName: "trash")
-                                        .foregroundColor(.red)
-                                }
-                                .buttonStyle(BorderlessButtonStyle())
-                            }
-                        }
-                    } header: {
-                        Label("已导入的第三方壁纸 (点击垃圾桶单个删除并即时刷新)", systemImage: "photo.stack.fill")
-                    }
-                }
-                
+                // 【位置对调：上移面板】Actions 操作区（包含 Apply 导入壁纸动作按钮）
                 Section {
                     VStack {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
@@ -110,7 +73,7 @@ struct ContentView: View {
                                             self.pbManager.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
                                             
-                                            // 3. 导入成功后自动执行巨魔级刷新缓存，免去手动操作
+                                            // 自动执行刷新重载，让新壁纸瞬间加载到系统“收藏”栏中
                                             self.pbManager.refreshPosterBoardSystem()
                                         }
                                     } catch CocoaError.fileWriteUnknown {
@@ -152,6 +115,44 @@ struct ContentView: View {
                     .padding(7)
                 } header: {
                     Label("Actions", systemImage: "hammer")
+                }
+                
+                // 【位置对调：下移列表】已精确过滤的第三方自定壁纸管理专属列表
+                if !pbManager.appliedWallpapers.isEmpty {
+                    Section {
+                        ForEach(pbManager.appliedWallpapers) { wallpaper in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(wallpaper.displayName)
+                                        .font(.body)
+                                        .fontWeight(.medium)
+                                    Text(wallpaper.extensionType.replacingOccurrences(of: "com.apple.", with: ""))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Button(action: {
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    do {
+                                        // 1. 删除目标物理文件
+                                        try self.pbManager.deleteAppliedWallpaper(wallpaper)
+                                        Haptic.shared.notify(.success)
+                                        
+                                        // 2. 自动化触发巨魔刷新指令，清除空白图标和脏索引并实时刷新生效
+                                        self.pbManager.refreshPosterBoardSystem()
+                                    } catch {
+                                        UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
+                                    }
+                                }) {
+                                    Image(systemName: "trash")
+                                        .foregroundColor(.red)
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                        }
+                    } header: {
+                        Label("已导入的第三方自定壁纸 (点击垃圾桶单个删除并即时重载)", systemImage: "photo.stack.fill")
+                    }
                 }
             }
             .navigationTitle("Pocket Poster")
