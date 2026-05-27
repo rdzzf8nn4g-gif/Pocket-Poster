@@ -13,9 +13,6 @@ struct SettingsView: View {
     
     var body: some View {
         List {
-            // 【核心修复】由于当前项目已完全采用更先进的通过 TrollStore API 动态获取 App 容器路径技术，
-            // 故此处已彻底移除此前失效且导致项目完全无法编译通过的 "App Hash" 配置段落及函数逻辑。
-            
             Section {
                 Toggle(isOn: $ignoreDurationLimit, label: {
                     Label("Disable Video Duration Limit", systemImage: "ruler")
