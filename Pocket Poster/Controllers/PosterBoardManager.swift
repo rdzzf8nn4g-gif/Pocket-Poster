@@ -8,7 +8,7 @@
 import Foundation
 import ZIPFoundation
 import UIKit
-import Dynamic
+import Dynamic // 使用内置 Dynamic 动态桥接
 
 // 已应用壁纸的数据模型
 struct AppliedWallpaper: Identifiable, Hashable {
@@ -29,7 +29,7 @@ class PosterBoardManager: ObservableObject {
     
     @Published var selectedTendies: [URL] = []
     @Published var videos: [LoadInfo] = []
-    @Published var appliedWallpapers: [AppliedWallpaper] = [] // 存储精确过滤后的自定壁纸
+    @Published var appliedWallpapers: [AppliedWallpaper] = [] // 存放精准过滤后的自定导入壁纸
     
     func getTendiesStoreURL() -> URL {
         let tendiesStoreURL = SymHandler.getDocumentsDirectory().appendingPathComponent("KFC Bucket", conformingTo: .directory)
@@ -60,16 +60,19 @@ class PosterBoardManager: ObservableObject {
         return success != nil
     }
     
-    // 【核心修复：彻底剔除巨魔 API 调用，仅安全终止系统守护进程防闪退】
+    // 【核心修复：完美对齐头文件方法签名，绝不主动打开海报版，纯后台静默强刷】
     func refreshPosterBoardSystem() {
         DispatchQueue.global(qos: .userInitiated).async {
-            // 安全操作：仅强杀 PosterBoard，让系统自动从物理路径安全冷启动。此调用安全稳定，不会触发 iOS 17 的 API 缺失崩溃。
-            Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: 1, andDescription: "Clear Cache", withOptions: nil)
-            
-            // 延时 0.5 秒重新唤醒应用
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                _ = self.openPosterBoard()
+            let service = Dynamic.FBSSystemService.sharedService()
+            if service != nil {
+                // 根据 FBSSystemService.h 头文件精确重构底层 Obj-C 方法调用：
+                // - (void)terminateApplication:(id)application forReason:(long long)reason andReport:(_Bool)report withDescription:(id)description;
+                // 使用 Int64(1) 完美匹配 long long，andReport 设为 false，彻底解决 unrecognized selector 导致的闪退崩溃。
+                service.terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: "Refresh PBFDataStore Cache")
             }
+            
+            // 【完全精简】：此处不调用任何 openPosterBoard()。
+            // 守护进程在被终止后，iOS 系统的 launchd 会在后台静默将它重新拉起，并强制重构其 PBFPosterExtensionDataStore 内存缓存，彻底解决空白块。
         }
     }
     
@@ -171,6 +174,7 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
+    // 【核心修改：绝对强匹配过滤，100% 只在删除列表展现自己导入的第三方壁纸】
     func fetchAppliedWallpapers() {
         var list: [AppliedWallpaper] = []
         guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") else { return }
@@ -179,6 +183,7 @@ class PosterBoardManager: ObservableObject {
         
         guard let extensions = try? FileManager.default.contentsOfDirectory(at: extensionsPath, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else { return }
         
+        // 从沙盒本地的专属追踪注册表中提取曾经通过本 App 导入成功的文件夹白名单
         let importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         
         for extFolder in extensions {
@@ -190,35 +195,24 @@ class PosterBoardManager: ObservableObject {
                 let folderName = item.lastPathComponent
                 if folderName == "__MACOSX" { continue }
                 
-                let lowerFolder = folderName.lowercased()
-                if lowerFolder.contains("system") || lowerFolder.hasPrefix("migration") || lowerFolder.contains("apple") || folderName.count < 5 {
-                    continue
-                }
-                
-                var displayName = folderName
-                var isSystemStock = false
-                
-                let plistURL = item.appendingPathComponent("Wallpaper.plist")
-                if FileManager.default.fileExists(atPath: plistURL.path) {
-                    if let data = try? Data(contentsOf: plistURL),
-                       let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] {
-                        if let name = plist["name"] as? String {
+                // 【核心沙盒护城河过滤逻辑】
+                // 只有当该壁纸文件夹名字显式包含在我们的 `ImportedWallpaperFolders` 历史数组中，它才会被允许列在删除列表里！
+                // 这从根本上彻底杜绝了系统固件自带壁纸（Collections/Astronomy/Emoji）在界面上的混淆展现。
+                if importedFolders.contains(folderName) {
+                    var displayName = folderName
+                    let plistURL = item.appendingPathComponent("Wallpaper.plist")
+                    if FileManager.default.fileExists(atPath: plistURL.path) {
+                        if let data = try? Data(contentsOf: plistURL),
+                           let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+                           let name = plist["name"] as? String {
                             displayName = name
-                            if name == "Collections" || name == "Astronomy" || name == "Emoji" || name == "Kaleidoscope" || name == "Color" {
-                                isSystemStock = true
-                            }
+                        }
+                    } else {
+                        let idURL = item.appendingPathComponent("com.apple.posterkit.provider.descriptor.identifier")
+                        if let idStr = try? String(contentsOf: idURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) {
+                            displayName = "已导壁纸 (ID: \(idStr))"
                         }
                     }
-                } else {
-                    let idURL = item.appendingPathComponent("com.apple.posterkit.provider.descriptor.identifier")
-                    if let idStr = try? String(contentsOf: idURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) {
-                        displayName = "自定壁纸 (ID: \(idStr))"
-                    }
-                }
-                
-                if isSystemStock { continue }
-                
-                if importedFolders.contains(folderName) || !lowerFolder.hasPrefix("com.apple") {
                     list.append(AppliedWallpaper(folderName: folderName, displayName: displayName, extensionType: extName, path: item))
                 }
             }
@@ -232,6 +226,7 @@ class PosterBoardManager: ObservableObject {
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
         try FileManager.default.removeItem(at: wallpaper.path)
         
+        // 同步从持久化自定注册表中彻底注销
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
@@ -294,6 +289,7 @@ class PosterBoardManager: ObservableObject {
                         
                         try FileManager.default.moveItem(at: descr, to: destURL)
                         
+                        // 将全新成功写入系统收藏沙盒的文件夹名字，牢牢登记进自定追踪表中
                         if !importedFolders.contains(descr.lastPathComponent) {
                             importedFolders.append(descr.lastPathComponent)
                         }
