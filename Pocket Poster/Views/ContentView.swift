@@ -54,6 +54,46 @@ struct ContentView: View {
                     }
                 }
                 
+                // 【新增核心功能块】自动识别并展现系统现存的所有导入壁纸，允许随时独立解绑删除
+                if !pbManager.appliedWallpapers.isEmpty {
+                    Section {
+                        ForEach(pbManager.appliedWallpapers) { wallpaper in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(wallpaper.displayName)
+                                        .font(.body)
+                                        .fontWeight(.medium)
+                                    Text(wallpaper.extensionType.replacingOccurrences(of: "com.apple.", with: ""))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Button(action: {
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    do {
+                                        // 执行物理文件剔除
+                                        try self.pbManager.deleteAppliedWallpaper(wallpaper)
+                                        Haptic.shared.notify(.success)
+                                        
+                                        // 【删除后实时生效机制】利用Pocket Poster自带的语系快速切换黑科技强制使PosterBoard重载缓存
+                                        if let lang = UserDefaults.standard.stringArray(forKey: "AppleLanguages")?.first {
+                                            _ = self.pbManager.setSystemLanguage(to: lang)
+                                        }
+                                    } catch {
+                                        UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
+                                    }
+                                }) {
+                                    Image(systemName: "trash")
+                                        .foregroundColor(.red)
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                        }
+                    } header: {
+                        Label("检测到系统已存在的壁纸 (点击可单独删除并生效)", systemImage: "photo.stack.fill")
+                    }
+                }
+                
                 Section {
                     VStack {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
@@ -64,7 +104,7 @@ struct ContentView: View {
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
                                         try self.pbManager.applyTendies()
-                                        SymHandler.cleanup() // just to be extra sure
+                                        SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: self.pbManager.getTendiesStoreURL())
                                         
                                         DispatchQueue.main.async {
@@ -99,7 +139,7 @@ struct ContentView: View {
                         Button(action: {
                             if #available(iOS 18.0, *) {
                                 guard let lang = UserDefaults.standard.stringArray(forKey: "AppleLanguages")?.first else {
-                                    hideResetHelp = false // fallback to tutorial
+                                    hideResetHelp = false
                                     return
                                 }
                                 UIApplication.shared.confirmAlert(title: NSLocalizedString("Reset Collections", comment: ""), body: NSLocalizedString("Do you want to reset collections?", comment: ""), onOK: {
@@ -160,6 +200,10 @@ struct ContentView: View {
                 .transition(.opacity)
                 .animation(.easeOut(duration: 0.5), value: hideResetHelp)
         }
+        .onAppear {
+            // 打开主界面时，自动刷新并识别已经安装过的系统壁纸列表
+            pbManager.fetchAppliedWallpapers()
+        }
     }
     
     func delete(at offsets: IndexSet) {
@@ -178,7 +222,6 @@ struct ContentView: View {
     }
     
     init() {
-        // Fix file picker
         let fixMethod = class_getInstanceMethod(UIDocumentPickerViewController.self, #selector(UIDocumentPickerViewController.fix_init(forOpeningContentTypes:asCopy:)))!
         let origMethod = class_getInstanceMethod(UIDocumentPickerViewController.self, #selector(UIDocumentPickerViewController.init(forOpeningContentTypes:asCopy:)))!
         method_exchangeImplementations(origMethod, fixMethod)
