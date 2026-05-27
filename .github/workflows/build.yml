@@ -1,10 +1,7 @@
 name: Build Pocket Poster IPA
 
 on:
-  push:
-    branches: [ "main" ] # 当推送到 main 分支时触发
-  pull_request:
-    branches: [ "main" ]
+  
   workflow_dispatch: # 允许你在 GitHub 网页上手动点击运行
 
 jobs:
