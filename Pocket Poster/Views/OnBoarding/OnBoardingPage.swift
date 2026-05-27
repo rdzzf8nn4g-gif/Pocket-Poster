@@ -5,7 +5,8 @@
 //  Created by lemin on 5/31/25.
 //
 
-import SwiftUICore
+// 【核心修复3】修正错误的私有库导入，使用标准的 SwiftUI
+import SwiftUI
 
 struct OnBoardingPage: Identifiable {
     var id = UUID()
