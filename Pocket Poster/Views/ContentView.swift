@@ -54,7 +54,7 @@ struct ContentView: View {
                     }
                 }
                 
-                // 系统内现有已导入壁纸的管理分区
+                // 已经通过 Tendies 导入的自定壁纸列表管理区
                 if !pbManager.appliedWallpapers.isEmpty {
                     Section {
                         ForEach(pbManager.appliedWallpapers) { wallpaper in
@@ -71,13 +71,12 @@ struct ContentView: View {
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                     do {
-                                        // 1. 原生删除物理文件
+                                        // 1. 删除物理壁纸文件
                                         try self.pbManager.deleteAppliedWallpaper(wallpaper)
                                         Haptic.shared.notify(.success)
                                         
-                                        // 2. 【核心改进】立即对系统壁纸进程实施冷启动重启，秒级剔除空白项并实时生效
+                                        // 2. 自动化巨魔级系统重载，即时刷新，告别空白占位符
                                         self.pbManager.refreshPosterBoardSystem()
-                                        
                                     } catch {
                                         UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
                                     }
@@ -89,7 +88,7 @@ struct ContentView: View {
                             }
                         }
                     } header: {
-                        Label("检测到系统已存在的壁纸 (可单独删除并实时生效)", systemImage: "photo.stack.fill")
+                        Label("已导入的第三方壁纸 (点击垃圾桶单个删除并即时刷新)", systemImage: "photo.stack.fill")
                     }
                 }
                 
@@ -111,7 +110,7 @@ struct ContentView: View {
                                             self.pbManager.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
                                             
-                                            // 3. 【核心改进】壁纸导入成功后，不再弹窗干预，直接强刷系统守护进程，让新导入的壁纸即刻刷新显示
+                                            // 3. 导入成功后自动执行巨魔级刷新缓存，免去手动操作
                                             self.pbManager.refreshPosterBoardSystem()
                                         }
                                     } catch CocoaError.fileWriteUnknown {
