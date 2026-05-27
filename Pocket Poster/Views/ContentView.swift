@@ -58,70 +58,67 @@ struct ContentView: View {
                 }
                 
                 Section {
-                    if pbHash == "" {
-                        Text("Enter your PosterBoard app hash in Settings.")
-                    } else {
-                        VStack {
-                            if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
-                                Button(action: {
-                                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                                    UIApplication.shared.alert(title: NSLocalizedString("Applying Wallpapers...", comment: ""), body: NSLocalizedString("Please wait", comment: ""), animated: false, withButton: false)
-
-                                    DispatchQueue.global(qos: .userInitiated).async {
-                                        do {
-                                            try pbManager.applyTendies(appHash: pbHash)
-                                            SymHandler.cleanup() // just to be extra sure
-                                            try? FileManager.default.removeItem(at: pbManager.getTendiesStoreURL())
-                                            UIApplication.shared.dismissAlert(animated: false)
-                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: {
-                                                pbManager.selectedTendies.removeAll()
-                                                Haptic.shared.notify(.success)
-                                                UIApplication.shared.confirmAlert(title: NSLocalizedString("Success!", comment: ""), body: NSLocalizedString("The PosterBoard app will now open. Please close it from the app switcher.", comment: ""), onOK: {
-                                                    if !pbManager.openPosterBoard() {
-                                                        UIApplication.shared.confirmAlert(title: NSLocalizedString("Falling Back to Shortcut", comment: ""), body: NSLocalizedString("PosterBoard failed to open directly. The fallback shortcut will now be opened.", comment: ""), onOK: {
-                                                            pbManager.runShortcut(named: "PosterBoard")
-                                                        }, noCancel: true)
-                                                    }
-                                                }, noCancel: true)
-                                            })
-                                        } catch CocoaError.fileWriteUnknown {
-                                            presentError(ApplyError.wrongAppHash)
-                                        } catch CocoaError.fileWriteFileExists {
-                                            presentError(ApplyError.collectionsNeedsReset)
-                                        } catch {
-                                            print(error.localizedDescription)
-                                            presentError(ApplyError.unexpected(info: error.localizedDescription))
-                                        }
-                                    }
-                                }) {
-                                    Label("Apply", systemImage: "checkmark.circle")
-                                }
-                                .buttonStyle(TintedButton(color: .blue, fullwidth: true))
-                            }
+                    VStack {
+                        if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
                             Button(action: {
-                                if #available(iOS 18.0, *) {
-                                    guard let lang = UserDefaults.standard.stringArray(forKey: "AppleLanguages")?.first else {
-                                        hideResetHelp = false // fallback to tutorial
-                                        return
+                                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+                                UIApplication.shared.alert(title: NSLocalizedString("Applying Wallpapers...", comment: ""), body: NSLocalizedString("Please wait", comment: ""), animated: false, withButton: false)
+
+                                DispatchQueue.global(qos: .userInitiated).async {
+                                    do {
+                                        // 【核心修复】移除 appHash 参数，匹配底层的动态路径注入 API
+                                        try pbManager.applyTendies()
+                                        SymHandler.cleanup() // just to be extra sure
+                                        try? FileManager.default.removeItem(at: pbManager.getTendiesStoreURL())
+                                        UIApplication.shared.dismissAlert(animated: false)
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: {
+                                            pbManager.selectedTendies.removeAll()
+                                            Haptic.shared.notify(.success)
+                                            UIApplication.shared.confirmAlert(title: NSLocalizedString("Success!", comment: ""), body: NSLocalizedString("The PosterBoard app will now open. Please close it from the app switcher.", comment: ""), onOK: {
+                                                if !pbManager.openPosterBoard() {
+                                                    UIApplication.shared.confirmAlert(title: NSLocalizedString("Falling Back to Shortcut", comment: ""), body: NSLocalizedString("PosterBoard failed to open directly. The fallback shortcut will now be opened.", comment: ""), onOK: {
+                                                        pbManager.runShortcut(named: "PosterBoard")
+                                                    }, noCancel: true)
+                                                }
+                                            }, noCancel: true)
+                                        })
+                                    } catch CocoaError.fileWriteUnknown {
+                                        presentError(ApplyError.wrongAppHash)
+                                    } catch CocoaError.fileWriteFileExists {
+                                        presentError(ApplyError.collectionsNeedsReset)
+                                    } catch {
+                                        print(error.localizedDescription)
+                                        presentError(ApplyError.unexpected(info: error.localizedDescription))
                                     }
-                                    UIApplication.shared.confirmAlert(title: NSLocalizedString("Reset Collections", comment: ""), body: NSLocalizedString("Do you want to reset collections?", comment: ""), onOK: {
-                                        if pbManager.setSystemLanguage(to: lang) {
-                                            UIApplication.shared.alert(title: NSLocalizedString("Collections Successfully Reset!", comment: ""), body: NSLocalizedString("Your PosterBoard will refresh automatically.", comment: ""))
-                                        } else {
-                                            UIApplication.shared.alert(body: "The API failed to call correctly.\nSystem Locale Code: \(lang)")
-                                        }
-                                    }, noCancel: false)
-                                } else {
-                                    hideResetHelp = false
                                 }
                             }) {
-                                Label("Reset Collections", systemImage: "arrow.clockwise.circle")
+                                Label("Apply", systemImage: "checkmark.circle")
                             }
-                            .buttonStyle(TintedButton(color: .red, fullwidth: true))
+                            .buttonStyle(TintedButton(color: .blue, fullwidth: true))
                         }
-                        .listRowInsets(EdgeInsets())
-                        .padding(7)
+                        Button(action: {
+                            if #available(iOS 18.0, *) {
+                                guard let lang = UserDefaults.standard.stringArray(forKey: "AppleLanguages")?.first else {
+                                    hideResetHelp = false // fallback to tutorial
+                                    return
+                                }
+                                UIApplication.shared.confirmAlert(title: NSLocalizedString("Reset Collections", comment: ""), body: NSLocalizedString("Do you want to reset collections?", comment: ""), onOK: {
+                                    if pbManager.setSystemLanguage(to: lang) {
+                                        UIApplication.shared.alert(title: NSLocalizedString("Collections Successfully Reset!", comment: ""), body: NSLocalizedString("Your PosterBoard will refresh automatically.", comment: ""))
+                                    } else {
+                                        UIApplication.shared.alert(body: "The API failed to call correctly.\nSystem Locale Code: \(lang)")
+                                    }
+                                }, noCancel: false)
+                            } else {
+                                hideResetHelp = false
+                            }
+                        }) {
+                            Label("Reset Collections", systemImage: "arrow.clockwise.circle")
+                        }
+                        .buttonStyle(TintedButton(color: .red, fullwidth: true))
                     }
+                    .listRowInsets(EdgeInsets())
+                    .padding(7)
                 } header: {
                     Label("Actions", systemImage: "hammer")
                 }
