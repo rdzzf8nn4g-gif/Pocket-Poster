@@ -60,18 +60,18 @@ struct ContentView: View {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
                             Button(action: {
                                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                                // 立刻呼出弹窗，覆盖整个长达 5 秒的底层操作轴
-                                UIApplication.shared.alert(title: NSLocalizedString("Applying...", comment: ""), body: NSLocalizedString("Please wait 5 seconds...", comment: ""), animated: false, withButton: false)
+                                
+                                // 【时间轴修改点】立即弹窗提示等待 3 秒，覆盖新的静默唤醒时间轴
+                                UIApplication.shared.alert(title: NSLocalizedString("Applying...", comment: ""), body: NSLocalizedString("Please wait 3 seconds...", comment: ""), animated: false, withButton: false)
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 核心操作：内部包含了 [杀 -> 写 -> 杀 -> 等5秒 -> 绝杀] 的完整时序
+                                        // 核心操作：包含了后台静默唤醒的新时间轴
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
                                         
                                         DispatchQueue.main.async {
-                                            // 全部操作(包含5秒休眠)执行完毕后，才关闭弹窗
                                             UIApplication.shared.dismissAlert(animated: false)
                                             PosterBoardManager.shared.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
@@ -133,15 +133,13 @@ struct ContentView: View {
                                 Spacer()
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    // 唤起专属的 6 秒删除等待弹窗
-                                    UIApplication.shared.alert(title: NSLocalizedString("Deleting...", comment: ""), body: NSLocalizedString("Please wait 6 seconds...", comment: ""), animated: false, withButton: false)
+                                    // 【时间轴修改点】这里修改为提示 3 秒
+                                    UIApplication.shared.alert(title: NSLocalizedString("Deleting...", comment: ""), body: NSLocalizedString("Please wait 3 seconds...", comment: ""), animated: false, withButton: false)
                                     
                                     DispatchQueue.global(qos: .userInitiated).async {
                                         do {
-                                            // 核心操作：内部包含了 [杀 -> 删 -> 等6秒 -> 绝杀]
                                             try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
                                             DispatchQueue.main.async {
-                                                // 6秒流水线跑完后，关闭界面遮罩
                                                 UIApplication.shared.dismissAlert(animated: false)
                                                 Haptic.shared.notify(.success)
                                             }
