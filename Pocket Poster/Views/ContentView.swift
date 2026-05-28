@@ -60,12 +60,12 @@ struct ContentView: View {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
                             Button(action: {
                                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                                // 立刻呼出弹窗，覆盖整个长达 3 秒的底层操作轴
-                                UIApplication.shared.alert(title: NSLocalizedString("Applying...", comment: ""), body: NSLocalizedString("Please wait 3 seconds...", comment: ""), animated: false, withButton: false)
+                                // 呼出 8 秒等待弹窗，覆盖背后的 8 秒压制期
+                                UIApplication.shared.alert(title: NSLocalizedString("Applying...", comment: ""), body: NSLocalizedString("Please wait 8 seconds...", comment: ""), animated: false, withButton: false)
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 核心操作：内部包含了 [杀 -> 写 -> 静默启动 -> 等3秒 -> 绝杀] 的完整时序
+                                        // 核心操作：写完后强力压制后台 8 秒
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
@@ -132,12 +132,12 @@ struct ContentView: View {
                                 Spacer()
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    // 唤起专属的 3 秒删除等待弹窗
-                                    UIApplication.shared.alert(title: NSLocalizedString("Deleting...", comment: ""), body: NSLocalizedString("Please wait 3 seconds...", comment: ""), animated: false, withButton: false)
+                                    // 唤起专属的 8 秒删除等待弹窗
+                                    UIApplication.shared.alert(title: NSLocalizedString("Deleting...", comment: ""), body: NSLocalizedString("Please wait 8 seconds...", comment: ""), animated: false, withButton: false)
                                     
                                     DispatchQueue.global(qos: .userInitiated).async {
                                         do {
-                                            // 核心操作：内部包含了 [杀 -> 删 -> 静默启动 -> 等3秒 -> 绝杀]
+                                            // 核心操作：删完后强力压制后台 8 秒
                                             try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
                                             DispatchQueue.main.async {
                                                 UIApplication.shared.dismissAlert(animated: false)
