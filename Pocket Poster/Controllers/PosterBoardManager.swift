@@ -8,9 +8,8 @@
 import Foundation
 import ZIPFoundation
 import UIKit
-import Dynamic
 import SQLite3
-import Darwin // 【核心引入】用于底层 BSD UNIX 进程操作 (sysctl / kill)
+import Darwin // 【核心引入】用于最底层的 BSD UNIX 进程遍历与击杀
 
 struct AppliedWallpaper: Identifiable, Hashable {
     var id: String { path.path }
@@ -111,8 +110,8 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【终极武器：将 Objective-C 的 sysctl + kill 纯底层逻辑翻译为 Swift】
-    // 配合特权 Entitlements，这是 iOS 上最绝对的杀进程手段
+    // 【终极进程清扫器：翻译自你提供的 Obj-C 代码】
+    // 纯底层 sysctl + SIGKILL，不依赖任何 XPC 框架，彻底杜绝服务器连接报错！
     private func forceKillProcessByName(_ targetName: String) {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
         var size: Int = 0
@@ -127,21 +126,21 @@ class PosterBoardManager: ObservableObject {
                 let pid = proc.kp_proc.p_pid
                 let commTuple = proc.kp_proc.p_comm
                 
-                // 解析 C 语言字符数组获取进程名
+                // 提取进程名称
                 let procName = withUnsafeBytes(of: commTuple) { rawPtr -> String in
                     let ptr = rawPtr.baseAddress!.assumingMemoryBound(to: CChar.self)
                     return String(cString: ptr)
                 }
                 
                 if procName == targetName {
-                    print("🔪 成功捕获并爆破进程: \(targetName) (PID: \(pid))")
-                    kill(pid, SIGKILL) // 暴击：发送 9 号死亡信号
+                    print("🔪 成功执行击杀: \(targetName) (PID: \(pid))")
+                    kill(pid, SIGKILL) // 暴击 9 号信号
                 }
             }
         }
     }
     
-    // 【双守护进程联合击杀】
+    // 联合清场方法
     private func killDaemons() {
         forceKillProcessByName("PosterBoard")
         forceKillProcessByName("wallpaperd")
@@ -158,6 +157,20 @@ class PosterBoardManager: ObservableObject {
         let workspace = obj.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject
         let success = workspace?.perform(Selector(("openApplicationWithBundleID:")), with: "com.apple.PosterBoard")
         return success != nil
+    }
+    
+    func refreshPosterBoardSystem() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") {
+                let cacheDir = URL(fileURLWithPath: "\(containerPath)/Library/Caches/com.apple.PosterBoard")
+                if FileManager.default.fileExists(atPath: cacheDir.path) {
+                    try? FileManager.default.removeItem(at: cacheDir)
+                }
+            }
+            let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
+            CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.wallpaper.changed" as CFString), nil, nil, true)
+            CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.posterkit.descriptors.changed" as CFString), nil, nil, true)
+        }
     }
     
     private func unzipFile(at sourceUrl: URL) throws -> URL {
@@ -303,14 +316,14 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 【全新时间轴】：删除流程 (点击杀首刀 -> 处理数据 -> 挂起6秒 -> 杀二刀)
+    // 【全新时间轴】：删除流程 (点击杀首刀 -> 删库 -> 挂起6秒 -> 杀二刀)
     // ============================================
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
-        // 1. 点击就直接杀一次，物理暴力解开 SQLite 锁
+        // 1. 暴力首杀断锁
         killDaemons()
-        Thread.sleep(forTimeInterval: 0.5) // 给定句柄释放时间
+        Thread.sleep(forTimeInterval: 0.5)
         
-        // 2. 擦除物理文件与数据库条目
+        // 2. 数据清理与数据库注入
         try FileManager.default.removeItem(at: wallpaper.path)
         injectIntoDatabase(uuid: wallpaper.folderName, providerId: wallpaper.extensionType, isDelete: true)
         
@@ -321,7 +334,7 @@ class PosterBoardManager: ObservableObject {
         // 3. 阻塞当前线程 6 秒（前端的弹窗将会刚好转满这 6 秒）
         Thread.sleep(forTimeInterval: 6.0)
         
-        // 4. 6秒到期，执行最后一次清扫，确保如果进程诈尸也会被干掉
+        // 4. 6秒到期，绝杀防诈尸
         killDaemons()
         broadcastDarwinNotifications()
         
@@ -351,7 +364,6 @@ class PosterBoardManager: ObservableObject {
             }
         }
         
-        // 临时解压（不需要杀进程）
         for url in selectedTendies {
             let unzippedDir = try unzipFile(at: url)
             guard let descriptors = try getDescriptorsFromTendie(unzippedDir) else { continue }
@@ -363,9 +375,9 @@ class PosterBoardManager: ObservableObject {
         }
         let extVer = SymHandler.getExtensionVersion()
         
-        // 1. 设置前杀一次：暴力断开写锁
+        // 1. 设置前首杀：暴力断开写锁
         killDaemons()
-        Thread.sleep(forTimeInterval: 0.5) // 给定句柄释放时间
+        Thread.sleep(forTimeInterval: 0.5)
         
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         
@@ -411,13 +423,13 @@ class PosterBoardManager: ObservableObject {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
-        // 3. 设置成功后杀一次（保护刚注入的数据库不被进程的脏内存覆盖）
+        // 3. 设置成功后杀二刀：迫使守护进程以包含新数据的状态冷启动
         killDaemons()
         
         // 4. 进入强制挂起期，等待 5 秒（前端弹窗将会完美覆盖这 5 秒）
         Thread.sleep(forTimeInterval: 5.0)
         
-        // 5. 5 秒到期后，如果进程重启期间产生了脏数据，进行防诈尸绝杀
+        // 5. 5 秒到期后，防诈尸三杀
         killDaemons()
         broadcastDarwinNotifications()
         
