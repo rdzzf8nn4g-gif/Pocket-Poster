@@ -9,7 +9,7 @@ import Foundation
 import ZIPFoundation
 import UIKit
 import SQLite3
-import Darwin // 【核心引入】用于最底层的 BSD UNIX 进程遍历与击杀
+import Darwin // 【核心引入】用于最底层的 BSD UNIX 进程遍历与击杀，绝对不会影响网络
 
 struct AppliedWallpaper: Identifiable, Hashable {
     var id: String { path.path }
@@ -110,8 +110,8 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【终极进程清扫器：翻译自你提供的 Obj-C 代码】
-    // 纯底层 sysctl + SIGKILL，不依赖任何 XPC 框架，彻底杜绝服务器连接报错！
+    // 【终极进程清扫器】
+    // 纯底层 sysctl + SIGKILL，彻底舍弃 XPC 框架，绝不干扰网络连接！
     private func forceKillProcessByName(_ targetName: String) {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
         var size: Int = 0
@@ -316,14 +316,14 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 【全新时间轴】：删除流程 (点击杀首刀 -> 删库 -> 挂起6秒 -> 杀二刀)
+    // 【时间轴流水线】：删除流程 (直接杀 -> 清库 -> 等6秒 -> 绝杀)
     // ============================================
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
-        // 1. 暴力首杀断锁
+        // 1. 暴力首杀解开写锁
         killDaemons()
         Thread.sleep(forTimeInterval: 0.5)
         
-        // 2. 数据清理与数据库注入
+        // 2. 擦除物理文件与数据库条目
         try FileManager.default.removeItem(at: wallpaper.path)
         injectIntoDatabase(uuid: wallpaper.folderName, providerId: wallpaper.extensionType, isDelete: true)
         
@@ -331,10 +331,10 @@ class PosterBoardManager: ObservableObject {
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 3. 阻塞当前线程 6 秒（前端的弹窗将会刚好转满这 6 秒）
+        // 3. 阻塞 6 秒（前端弹窗同步覆盖）
         Thread.sleep(forTimeInterval: 6.0)
         
-        // 4. 6秒到期，绝杀防诈尸
+        // 4. 6秒到期，执行绝杀清扫
         killDaemons()
         broadcastDarwinNotifications()
         
@@ -344,7 +344,7 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 【全新时间轴】：应用流程 (杀首刀 -> 写数据 -> 杀二刀 -> 挂起5秒 -> 杀三刀)
+    // 【时间轴流水线】：应用流程 (杀 -> 写入 -> 杀 -> 等5秒 -> 绝杀)
     // ============================================
     func applyTendies() throws {
         var extList: [String: [URL]] = [:]
@@ -375,7 +375,7 @@ class PosterBoardManager: ObservableObject {
         }
         let extVer = SymHandler.getExtensionVersion()
         
-        // 1. 设置前首杀：暴力断开写锁
+        // 1. 设置前杀一次：暴力断开系统锁
         killDaemons()
         Thread.sleep(forTimeInterval: 0.5)
         
@@ -416,20 +416,19 @@ class PosterBoardManager: ObservableObject {
         
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 清理本地临时文件
         for url in selectedTendies {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent("UnzipItems", conformingTo: .directory))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.lastPathComponent))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
-        // 3. 设置成功后杀二刀：迫使守护进程以包含新数据的状态冷启动
+        // 3. 设置成功后杀一次（保护注入的数据库立马被冷加载）
         killDaemons()
         
-        // 4. 进入强制挂起期，等待 5 秒（前端弹窗将会完美覆盖这 5 秒）
+        // 4. 进入强制挂起期，等待 5 秒
         Thread.sleep(forTimeInterval: 5.0)
         
-        // 5. 5 秒到期后，防诈尸三杀
+        // 5. 5 秒到期后，如果进程重启期间发生缓存抖动，进行防诈尸绝杀
         killDaemons()
         broadcastDarwinNotifications()
         
