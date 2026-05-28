@@ -65,13 +65,13 @@ struct ContentView: View {
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 核心操作：内部包含了 [首杀 -> 写 -> 二杀 -> 等5秒 -> 绝杀] 的完整时序
+                                        // 核心操作：内部包含了 [杀 -> 写 -> 杀 -> 等5秒 -> 绝杀] 的完整时序
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
                                         
                                         DispatchQueue.main.async {
-                                            // 全部操作且 5 秒休眠执行完毕后，才关闭弹窗
+                                            // 全部操作(包含5秒休眠)执行完毕后，才关闭弹窗
                                             UIApplication.shared.dismissAlert(animated: false)
                                             PosterBoardManager.shared.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
@@ -138,7 +138,7 @@ struct ContentView: View {
                                     
                                     DispatchQueue.global(qos: .userInitiated).async {
                                         do {
-                                            // 核心操作：内部包含了 [首杀 -> 删库 -> 等6秒 -> 绝杀]
+                                            // 核心操作：内部包含了 [杀 -> 删 -> 等6秒 -> 绝杀]
                                             try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
                                             DispatchQueue.main.async {
                                                 // 6秒流水线跑完后，关闭界面遮罩
@@ -160,15 +160,17 @@ struct ContentView: View {
                             }
                         }
                     } header: {
-                        Label("已导入的第三方自定壁纸 (点击垃圾桶单个删除并即时生效)", systemImage: "photo.stack.fill")
+                        Label("已导入的第三方自定壁纸 (点击垃圾桶单个删除并即时刷新)", systemImage: "photo.stack.fill")
                     }
                 }
             }
             .navigationTitle("Pocket Poster")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    NavigationLink(destination: ExploreView()) {
-                        Image(systemName: "safari")
+                    if let wpURL = URL(string: PosterBoardManager.WallpapersURL) {
+                        Link(destination: wpURL) {
+                            Image(systemName: "safari")
+                        }
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing, content: {
