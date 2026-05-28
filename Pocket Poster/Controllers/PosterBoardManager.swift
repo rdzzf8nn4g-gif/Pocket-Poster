@@ -9,8 +9,10 @@ import Foundation
 import ZIPFoundation
 import UIKit
 import Dynamic
-import SQLite3 // 使用原生 SQLite3 库对系统壁纸数据库进行微创注入
+import SQLite3
+import Darwin // 【核心引入】：用于执行底层的 dlopen 和 posix_spawn 强制爆破命令
 
+// 已应用自定壁纸的数据模型
 struct AppliedWallpaper: Identifiable, Hashable {
     var id: String { path.path }
     var folderName: String
@@ -111,10 +113,36 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【全新加入的底层控制函数：无警告盲杀双 Daemon】
+    // 【终极武器：巨魔底层 POSIX 爆破，无视任何系统锁死】
+    private func forceKillProcess(_ name: String) {
+        var pid: pid_t = 0
+        let args = ["/usr/bin/killall", "-9", name]
+        var cArgs = args.map { strdup($0) }
+        cArgs.append(nil)
+        
+        posix_spawn(&pid, "/usr/bin/killall", nil, nil, &cArgs, nil)
+        var status: Int32 = 0
+        waitpid(pid, &status, 0)
+        
+        for ptr in cArgs {
+            if let ptr = ptr { free(ptr) }
+        }
+    }
+    
+    // 【系统级双保险击杀协议】
     private func killDaemons(reason: String) {
-        Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: reason)
-        Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.wallpaperd", forReason: Int64(1), andReport: false, withDescription: reason)
+        // 1. Apple 官方私有框架强杀（必须先 dlopen 加载到内存，否则直接静默失败）
+        let handle = dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_LAZY)
+        if handle != nil {
+            let service = Dynamic.FBSSystemService.sharedService()
+            service.terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: reason)
+            service.terminateApplication("com.apple.wallpaperd", forReason: Int64(1), andReport: false, withDescription: reason)
+            dlclose(handle)
+        }
+        
+        // 2. 巨魔专属 C 语言底层爆破（作为双保险，无论如何进程必死）
+        forceKillProcess("PosterBoard")
+        forceKillProcess("wallpaperd")
     }
     
     private func broadcastDarwinNotifications() {
@@ -272,13 +300,14 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【全新重构：删除时间轴流水线（杀一刀 -> 删库 -> 等6秒 -> 杀绝刀）】
+    // 【全新架构：删除流水线】
+    // 流程：点击直接前置首杀 -> 清数据 -> 挂起6秒 -> 后置补杀
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
-        // 1. 点击就直接杀一次，断开 SQLite 文件锁
+        // 1. 点击立刻清场释放 SQLite 写锁
         killDaemons(reason: "Pre-Delete Kill")
-        Thread.sleep(forTimeInterval: 0.5) // 极短休眠让系统真正释放句柄
+        Thread.sleep(forTimeInterval: 0.5)
         
-        // 2. 擦除物理文件与数据库条目
+        // 2. 擦除物理文件并清理数据库
         try FileManager.default.removeItem(at: wallpaper.path)
         injectIntoDatabase(uuid: wallpaper.folderName, providerId: wallpaper.extensionType, isDelete: true)
         
@@ -286,10 +315,10 @@ class PosterBoardManager: ObservableObject {
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 3. 按照要求，保持弹窗阻塞等待 6 秒
+        // 3. 阻塞等待 6 秒（前端的弹窗将遮罩在此期间）
         Thread.sleep(forTimeInterval: 6.0)
         
-        // 4. 6 秒内如果又活了，继续杀一次（盲杀），确保重启读取干净
+        // 4. 6 秒后执行最后一次清扫，确保自愈完毕
         killDaemons(reason: "Post-Delete 6s Safety Kill")
         broadcastDarwinNotifications()
         
@@ -298,7 +327,8 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【全新重构：应用时间轴流水线（杀一刀 -> 写库 -> 杀二刀 -> 等5秒 -> 杀三刀）】
+    // 【全新架构：应用流水线】
+    // 流程：前置首杀 -> 写入数据 -> 后置二杀 -> 挂起5秒 -> 补枪三杀
     func applyTendies() throws {
         var extList: [String: [URL]] = [:]
         if videos.count > 0 {
@@ -317,7 +347,6 @@ class PosterBoardManager: ObservableObject {
             }
         }
         
-        // 先在后台临时目录解压（不需要锁）
         for url in selectedTendies {
             let unzippedDir = try unzipFile(at: url)
             guard let descriptors = try getDescriptorsFromTendie(unzippedDir) else { continue }
@@ -329,13 +358,12 @@ class PosterBoardManager: ObservableObject {
         }
         let extVer = SymHandler.getExtensionVersion()
         
-        // 1. 设置前杀一次
+        // 1. 设置前杀一次：剥夺数据库独占权
         killDaemons(reason: "Pre-Apply Kill")
-        Thread.sleep(forTimeInterval: 0.5) // 给定句柄释放时间
+        Thread.sleep(forTimeInterval: 0.5)
         
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         
-        // 物理直写 + SQLite 强制微创注入
         for (ext, descriptorsList) in extList {
             let targetDir = URL(fileURLWithPath: "\(containerPath)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)/Extensions/\(ext)/descriptors")
             
@@ -361,7 +389,7 @@ class PosterBoardManager: ObservableObject {
                             importedFolders.append(uniqueFolderUUID)
                         }
                         
-                        // 注入三表
+                        // 强制微创注入 SQLite
                         injectIntoDatabase(uuid: uniqueFolderUUID, providerId: ext, isDelete: false)
                     }
                 }
@@ -370,20 +398,19 @@ class PosterBoardManager: ObservableObject {
         
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 清理本地临时解压文件
         for url in selectedTendies {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent("UnzipItems", conformingTo: .directory))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.lastPathComponent))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
-        // 2. 设置成功后杀一次（保护注入的数据库被立即加载）
+        // 2. 写入成功后杀二次：迫使守护进程以包含新数据的状态冷启动
         killDaemons(reason: "Post-Apply Kill")
         
-        // 3. 按照要求，设置成功等待 5 秒（配合前台等待框）
+        // 3. 进入强行阻滞期：等待 5 秒
         Thread.sleep(forTimeInterval: 5.0)
         
-        // 4. 等待 5 秒后，如果进程重新活了，再杀一次，没有就直接结束
+        // 4. 等待 5 秒后，进行第三次安全校验击杀（无痕补刀）
         killDaemons(reason: "Safety 5s Final Kill")
         broadcastDarwinNotifications()
         
