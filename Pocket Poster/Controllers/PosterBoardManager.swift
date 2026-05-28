@@ -144,7 +144,7 @@ class PosterBoardManager: ObservableObject {
     private func killDaemons() {
         forceKillProcessByName("PosterBoard")
         forceKillProcessByName("wallpaperd")
-        forceKillProcessByName("CollectionsPoster") // 适配多进程猎杀
+        forceKillProcessByName("CollectionsPoster") // 你的新要求
     }
     
     // 【高频轮询绝对压制，漏头就秒】
@@ -164,14 +164,6 @@ class PosterBoardManager: ObservableObject {
         let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
         CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.wallpaper.changed" as CFString), nil, nil, true)
         CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.posterkit.descriptors.changed" as CFString), nil, nil, true)
-    }
-    
-    // 【显式启动方法：带前台跳转】
-    func openPosterBoard() -> Bool {
-        guard let obj = objc_getClass("LSApplicationWorkspace") as? NSObject else { return false }
-        let workspace = obj.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject
-        let success = workspace?.perform(Selector(("openApplicationWithBundleID:")), with: "com.apple.PosterBoard")
-        return success != nil
     }
     
     private func unzipFile(at sourceUrl: URL) throws -> URL {
@@ -293,19 +285,31 @@ class PosterBoardManager: ObservableObject {
                 
                 if importedFolders.contains(folderName) {
                     var displayName = folderName
-                    let plistURL = item.appendingPathComponent("Wallpaper.plist")
-                    if FileManager.default.fileExists(atPath: plistURL.path) {
-                        if let data = try? Data(contentsOf: plistURL),
-                           let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-                           let name = plist["name"] as? String {
-                            displayName = name
+                    var foundName = false
+                    
+                    // 【关键修复】：深度遍历文件夹，寻找隐藏在内部的 Wallpaper.plist
+                    if let enumerator = FileManager.default.enumerator(at: item, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                        for case let fileURL as URL in enumerator {
+                            if fileURL.lastPathComponent == "Wallpaper.plist" {
+                                if let data = try? Data(contentsOf: fileURL),
+                                   let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+                                   let name = plist["name"] as? String {
+                                    displayName = name
+                                    foundName = true
+                                    break
+                                }
+                            }
                         }
-                    } else {
+                    }
+                    
+                    // 如果找不到 Wallpaper.plist 里的 name，退而求其次读取 ID
+                    if !foundName {
                         let idURL = item.appendingPathComponent("com.apple.posterkit.provider.descriptor.identifier")
                         if let idStr = try? String(contentsOf: idURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) {
                             displayName = "自定壁纸 (\(idStr))"
                         }
                     }
+                    
                     list.append(AppliedWallpaper(folderName: folderName, displayName: displayName, extensionType: extName, path: item))
                 }
             }
@@ -320,11 +324,9 @@ class PosterBoardManager: ObservableObject {
     // 全部删除流程 (删数据 -> 3秒绝对压制)
     // ============================================
     func deleteAllAppliedWallpapers() throws {
-        // 1. 暴力解开 SQLite 锁
         killDaemons()
         Thread.sleep(forTimeInterval: 0.5)
         
-        // 2. 擦除所有已导入壁纸的文件与数据库条目
         for wallpaper in appliedWallpapers {
             try? FileManager.default.removeItem(at: wallpaper.path)
             injectIntoDatabase(uuid: wallpaper.folderName, providerId: wallpaper.extensionType, isDelete: true)
@@ -332,10 +334,7 @@ class PosterBoardManager: ObservableObject {
         
         UserDefaults.standard.set([], forKey: "ImportedWallpaperFolders")
         
-        // 3. 执行 3 秒绝对压制
         enforceSuppression(for: 3.0)
-        
-        // 4. 通知系统刷新
         broadcastDarwinNotifications()
         
         DispatchQueue.main.async {
@@ -347,11 +346,9 @@ class PosterBoardManager: ObservableObject {
     // 单个删除流程 (删数据 -> 3秒绝对压制)
     // ============================================
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
-        // 1. 暴力解开 SQLite 锁
         killDaemons()
         Thread.sleep(forTimeInterval: 0.5) 
         
-        // 2. 擦除物理文件与数据库条目
         try FileManager.default.removeItem(at: wallpaper.path)
         injectIntoDatabase(uuid: wallpaper.folderName, providerId: wallpaper.extensionType, isDelete: true)
         
@@ -359,10 +356,7 @@ class PosterBoardManager: ObservableObject {
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 3. 执行 3 秒绝对压制 (每 0.1 秒秒杀诈尸进程)
         enforceSuppression(for: 3.0)
-        
-        // 4. 压制结束后广播通知系统刷新
         broadcastDarwinNotifications()
         
         DispatchQueue.main.async {
@@ -371,12 +365,11 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 应用流程 (顺序写入多壁纸 -> 8秒绝对压制 -> 前台跳转)
+    // 应用流程 (顺序写入多壁纸 -> 6秒绝对压制 -> 无跳转)
     // ============================================
     func applyTendies() throws {
         var extList: [String: [URL]] = [:]
         
-        // 预处理：解析视频和多选的 Tendies，全部放进 extList 排队
         if videos.count > 0 {
             extList["com.apple.WallpaperKit.CollectionsPoster"] = []
             for video in videos {
@@ -403,13 +396,11 @@ class PosterBoardManager: ObservableObject {
         }
         let extVer = SymHandler.getExtensionVersion()
         
-        // 1. 设置前杀一次：暴力断开写锁，准备安全注入
         killDaemons()
         Thread.sleep(forTimeInterval: 0.5) 
         
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         
-        // 2. 物理直写 + SQLite 按顺序依次强行注入 (天然保证了多壁纸同步按顺序)
         for (ext, descriptorsList) in extList {
             let targetDir = URL(fileURLWithPath: "\(containerPath)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)/Extensions/\(ext)/descriptors")
             
@@ -435,7 +426,6 @@ class PosterBoardManager: ObservableObject {
                             importedFolders.append(uniqueFolderUUID)
                         }
                         
-                        // 顺序单线程调用 SQLite 注入，保证不冲突
                         injectIntoDatabase(uuid: uniqueFolderUUID, providerId: ext, isDelete: false)
                     }
                 }
@@ -444,22 +434,20 @@ class PosterBoardManager: ObservableObject {
         
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 临时解压垃圾清理
         for url in selectedTendies {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent("UnzipItems", conformingTo: .directory))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.lastPathComponent))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
-        // 3. 所有壁纸数据完美写入后，开启 8 秒“漏头就秒”绝对压制期
-        enforceSuppression(for: 8.0)
+        // 3. 所有壁纸数据完美写入后，开启 6 秒“漏头就秒”绝对压制期
+        enforceSuppression(for: 6.0)
         
         // 4. 彻底压制完毕后，释放系统广播通知
         broadcastDarwinNotifications()
         
-        // 5. 跳转打开海报版 (PosterBoard) 并刷新 UI
+        // 5. 【取消跳转】，仅静默刷新内部列表
         DispatchQueue.main.async {
-            let _ = self.openPosterBoard()
             self.fetchAppliedWallpapers()
         }
     }
