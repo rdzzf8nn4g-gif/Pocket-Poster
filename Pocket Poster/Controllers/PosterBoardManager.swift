@@ -60,29 +60,44 @@ class PosterBoardManager: ObservableObject {
         return success != nil
     }
     
-    // 【终极重构：精准对齐头文件方法签名，物理切断脏快照，完全静默后台刷新】
+    // 【根据iOS 17头文件最高指示：抹除 SQLite 数据库级脏缓存，执行彻底全弹道刷新】
     func refreshPosterBoardSystem() {
         DispatchQueue.global(qos: .userInitiated).async {
-            // 1. 根据 PBFPosterExtensionDataStore.h 的设计，优先在后台物理擦除常驻的快照脏缓存目录，防止删除后留下空白块
+            let fileManager = FileManager.default
+            
+            // 获取 PosterBoard 的系统沙盒容器绝对路径
             if let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") {
+                
+                // 1. 斩断图片快照脏缓存映射 (对应头文件 _galleryCacheURL)
                 let cacheDir = URL(fileURLWithPath: "\(containerPath)/Library/Caches/com.apple.PosterBoard")
-                let fileManager = FileManager.default
                 if fileManager.fileExists(atPath: cacheDir.path) {
                     try? fileManager.removeItem(at: cacheDir)
                 }
+                
+                // 2. 核心粉碎：定位并物理抹除 iOS 17 强固的 SQLite 数据库索引文件 (对应头文件 _database)
+                let extVer = SymHandler.getExtensionVersion()
+                let dataStoreDirStr = "\(containerPath)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)"
+                let dataStoreURL = URL(fileURLWithPath: dataStoreDirStr)
+                
+                // 扫描并精确抹除该目录下所有的 sqlite 索引、日志及共享内存缓存，彻底阻断鬼影空白块
+                if let files = try? fileManager.contentsOfDirectory(at: dataStoreURL, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
+                    for file in files {
+                        let fileName = file.lastPathComponent.lowercased()
+                        if fileName.contains("sqlite") {
+                            try? fileManager.removeItem(at: file)
+                        }
+                    }
+                }
             }
             
-            // 2. 获取系统 FrontBoard 服务
+            // 3. 完美对齐头文件 FBSSystemService.h 声明的方法签名执行冷启动重载：
+            // - (void)terminateApplication:(id)application forReason:(long long)reason andReport:(_Bool)report withDescription:(id)description;
             let service = Dynamic.FBSSystemService.sharedService()
             if service != nil {
-                // 【完美对齐头文件签名】
-                // - (void)terminateApplication:(id)application forReason:(long long)reason andReport:(_Bool)report withDescription:(id)description;
-                // 严格传递 Int64(1) 作为 long long，andReport 设为 false，带入自定描述。前后端参数 100% 对齐，永不闪退。
-                service.terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: "Refresh PBFDataStore Cache")
+                service.terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: "Rebuild SQLite PBFDataStore")
             }
             
-            // 【完全静默化】彻底移除了重新唤醒打开海报版的代码。
-            // 进程被干掉后，系统的 launchd 会在后台自动静默拉起它，强行重建全新的壁纸数据库索引，此时你去锁屏界面查看，壁纸已经悄悄实时生效更新。
+            // 完全实现后台静默。不执行任何主动打开海报版的弹窗干扰代码，系统 launchd 重新拉起它时将自动全盘重构。
         }
     }
     
@@ -184,7 +199,7 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【核心修改：绝对隔离追踪，100% 过滤隐藏系统自带原厂壁纸】
+    // 【双层历史白名单强匹配：确保100%只有自己用本 App 导进去的第三方自定壁纸才会在列表里展现】
     func fetchAppliedWallpapers() {
         var list: [AppliedWallpaper] = []
         guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") else { return }
@@ -205,7 +220,7 @@ class PosterBoardManager: ObservableObject {
                 let folderName = item.lastPathComponent
                 if folderName == "__MACOSX" { continue }
                 
-                // 【双层过滤栅栏】只有完全匹配白名单数组的项，才是用户自己导进去的壁纸，才会显示在删除列表里
+                // 只有完全匹配本 App 白名单登记数组的项，才是用户导入的壁纸，系统自带原厂壁纸一律直接拦截隐藏
                 if importedFolders.contains(folderName) {
                     var displayName = folderName
                     let plistURL = item.appendingPathComponent("Wallpaper.plist")
@@ -234,7 +249,7 @@ class PosterBoardManager: ObservableObject {
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
         try FileManager.default.removeItem(at: wallpaper.path)
         
-        // 同步在持久化数据白名单中注销该特征名
+        // 同步在持久化数据白名单中注销
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
@@ -297,7 +312,7 @@ class PosterBoardManager: ObservableObject {
                         
                         try FileManager.default.moveItem(at: descr, to: destURL)
                         
-                        // 登记新写入成功的自定项目到历史白名单中
+                        // 登记新写入成功的第三方自定项目到追踪白名单中
                         if !importedFolders.contains(descr.lastPathComponent) {
                             importedFolders.append(descr.lastPathComponent)
                         }
