@@ -60,13 +60,12 @@ struct ContentView: View {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
                             Button(action: {
                                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                                
-                                // 【时间轴修改点】立即弹窗提示等待 3 秒，覆盖新的静默唤醒时间轴
+                                // 立刻呼出弹窗，覆盖整个长达 3 秒的底层操作轴
                                 UIApplication.shared.alert(title: NSLocalizedString("Applying...", comment: ""), body: NSLocalizedString("Please wait 3 seconds...", comment: ""), animated: false, withButton: false)
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 核心操作：包含了后台静默唤醒的新时间轴
+                                        // 核心操作：内部包含了 [杀 -> 写 -> 静默启动 -> 等3秒 -> 绝杀] 的完整时序
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
@@ -133,11 +132,12 @@ struct ContentView: View {
                                 Spacer()
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    // 【时间轴修改点】这里修改为提示 3 秒
+                                    // 唤起专属的 3 秒删除等待弹窗
                                     UIApplication.shared.alert(title: NSLocalizedString("Deleting...", comment: ""), body: NSLocalizedString("Please wait 3 seconds...", comment: ""), animated: false, withButton: false)
                                     
                                     DispatchQueue.global(qos: .userInitiated).async {
                                         do {
+                                            // 核心操作：内部包含了 [杀 -> 删 -> 静默启动 -> 等3秒 -> 绝杀]
                                             try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
                                             DispatchQueue.main.async {
                                                 UIApplication.shared.dismissAlert(animated: false)
