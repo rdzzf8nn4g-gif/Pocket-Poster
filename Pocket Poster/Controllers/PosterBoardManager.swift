@@ -158,6 +158,23 @@ class PosterBoardManager: ObservableObject {
         let success = workspace?.perform(Selector(("openApplicationWithBundleID:")), with: "com.apple.PosterBoard")
         return success != nil
     }
+
+    // 【全新武器：利用底层隐藏字典参数，强行在后台静默唤醒 App】
+    private func openPosterBoardSilently() {
+        guard let obj = objc_getClass("LSApplicationWorkspace") as? NSObject else { return }
+        guard let workspace = obj.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject else { return }
+        
+        // 注入私有启动参数：要求挂起并隐藏启动，绝对不能触发前台 UI 跳转
+        let options = NSMutableDictionary()
+        options.setValue(NSNumber(value: true), forKey: "__ActivateSuspended")
+        options.setValue(NSNumber(value: true), forKey: "__ActivateHidden")
+        
+        let selector = Selector(("openApplicationWithBundleID:options:"))
+        if workspace.responds(to: selector) {
+            workspace.perform(selector, with: "com.apple.PosterBoard", with: options)
+            print("🚀 已向系统发送静默后台唤醒 PosterBoard 的指令")
+        }
+    }
     
     private func unzipFile(at sourceUrl: URL) throws -> URL {
         let fileName = sourceUrl.deletingPathExtension().lastPathComponent
@@ -302,7 +319,7 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 删除流程 (点击杀首刀 -> 处理数据 -> 静默唤醒 -> 挂起3秒 -> 绝杀)
+    // 删除流程 (点击杀首刀 -> 处理数据 -> 真实后台静默启动 -> 挂起3秒 -> 绝杀)
     // ============================================
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
         // 1. 暴力解开 SQLite 锁
@@ -317,13 +334,13 @@ class PosterBoardManager: ObservableObject {
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 3. 利用 Darwin 通知触发后台静默唤醒，让系统自动开始处理新数据
-        broadcastDarwinNotifications()
+        // 3. 强行在后台唤醒 PosterBoard 进程，让它去读取最新的数据库 (无 UI 跳转)
+        openPosterBoardSilently()
         
-        // 4. 阻塞当前线程 3 秒，让 PosterBoard 在后台处理数据
+        // 4. 阻塞当前线程 3 秒，让刚被唤醒的 PosterBoard 有时间处理数据
         Thread.sleep(forTimeInterval: 3.0)
         
-        // 5. 3秒到期，执行清扫防诈尸，并再次通知 SpringBoard 刷新
+        // 5. 3秒到期，再次击杀释放句柄，然后通知 SpringBoard 刷新 UI
         killDaemons()
         broadcastDarwinNotifications()
         
@@ -333,7 +350,7 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 应用流程 (写数据前杀 -> 写入 -> 后台静默唤醒 -> 等3秒 -> 绝杀)
+    // 应用流程 (写数据前杀 -> 写入 -> 真实后台静默启动 -> 等3秒 -> 绝杀)
     // ============================================
     func applyTendies() throws {
         var extList: [String: [URL]] = [:]
@@ -343,7 +360,7 @@ class PosterBoardManager: ObservableObject {
                 switch video.loadState {
                 case .loaded(let movie):
                     do {
-                        // 注意：这里处理视频比较慢，可能会造成弹窗出来前略有卡顿，但它确确实实处理完才会杀进程
+                        // 注意：这里处理视频比较慢，会造成弹窗出来前略有卡顿，处理完才会杀进程
                         let newVideo = try VideoHandler.createCaml(from: movie.url, autoReverses: video.autoReverses)
                         extList["com.apple.WallpaperKit.CollectionsPoster"]?.append(newVideo)
                     } catch {
@@ -414,16 +431,16 @@ class PosterBoardManager: ObservableObject {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
-        // 3. 通知系统在后台静默唤醒并处理刚刚写入的数据
-        broadcastDarwinNotifications()
+        // 3. 强行在后台唤醒 PosterBoard，使其以幽灵模式建构缓存
+        openPosterBoardSilently()
         
-        // 4. 进入强制挂起期，等待 3 秒 (此时系统正在后台疯狂建缓存)
+        // 4. 等待 3 秒让其完成读表和渲染
         Thread.sleep(forTimeInterval: 3.0)
         
-        // 5. 3 秒到期后，为防止进程长期占用产生脏数据，进行防诈尸绝杀
+        // 5. 3 秒到期后，将其击杀收尾
         killDaemons()
         
-        // 再次通知刷新 UI
+        // 再次发送广播让 SpringBoard 意识到锁屏环境已更新
         broadcastDarwinNotifications()
         
         DispatchQueue.main.async {
