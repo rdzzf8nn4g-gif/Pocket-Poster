@@ -67,11 +67,13 @@ class PosterBoardManager: ObservableObject {
         return nil
     }
     
+    // 按顺序单线程安全写入数据库
     private func injectIntoDatabase(uuid: String, providerId: String, isDelete: Bool) {
         guard let dbPath = findDatabasePath() else { return }
         
         var db: OpaquePointer?
         if sqlite3_open(dbPath, &db) == SQLITE_OK {
+            // 设置 2000ms 的超时等待，防止进程偶尔诈尸锁库时发生崩溃
             sqlite3_exec(db, "PRAGMA busy_timeout = 2000;", nil, nil, nil)
             var stmt: OpaquePointer?
             
@@ -111,7 +113,7 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【终极武器：将 Objective-C 的 sysctl + kill 纯底层逻辑翻译为 Swift】
+    // 【底层系统级暴击：根据进程名查找 PID 并发送 SIGKILL (9号信号)】
     private func forceKillProcessByName(_ targetName: String) {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
         var size: Int = 0
@@ -126,24 +128,37 @@ class PosterBoardManager: ObservableObject {
                 let pid = proc.kp_proc.p_pid
                 let commTuple = proc.kp_proc.p_comm
                 
-                // 解析 C 语言字符数组获取进程名
                 let procName = withUnsafeBytes(of: commTuple) { rawPtr -> String in
                     let ptr = rawPtr.baseAddress!.assumingMemoryBound(to: CChar.self)
                     return String(cString: ptr)
                 }
                 
                 if procName == targetName {
-                    print("🔪 成功捕获并爆破进程: \(targetName) (PID: \(pid))")
-                    kill(pid, SIGKILL) // 暴击：发送 9 号死亡信号
+                    // print("🔪 成功捕获并爆破进程: \(targetName) (PID: \(pid))")
+                    kill(pid, SIGKILL) 
                 }
             }
         }
     }
     
-    // 【双守护进程联合击杀】
+    // 【三守护进程联合击杀名单】
     private func killDaemons() {
         forceKillProcessByName("PosterBoard")
         forceKillProcessByName("wallpaperd")
+        forceKillProcessByName("CollectionsPoster") // 你的新要求：新增 CollectionsPoster 进程
+    }
+    
+    // 【全新机制：8秒高频轮询绝对压制，漏头就秒】
+    private func enforceSuppression(for seconds: TimeInterval) {
+        print("🛡️ 开始执行 \(seconds) 秒的绝对压制，漏头就秒...")
+        let endTime = Date().addingTimeInterval(seconds)
+        
+        // 循环持续到时间结束，每 0.1 秒进行一次全盘扫荡
+        while Date() < endTime {
+            killDaemons()
+            Thread.sleep(forTimeInterval: 0.1) 
+        }
+        print("🛡️ 压制期结束。")
     }
     
     private func broadcastDarwinNotifications() {
@@ -157,23 +172,6 @@ class PosterBoardManager: ObservableObject {
         let workspace = obj.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject
         let success = workspace?.perform(Selector(("openApplicationWithBundleID:")), with: "com.apple.PosterBoard")
         return success != nil
-    }
-
-    // 【全新武器：利用底层隐藏字典参数，强行在后台静默唤醒 App】
-    private func openPosterBoardSilently() {
-        guard let obj = objc_getClass("LSApplicationWorkspace") as? NSObject else { return }
-        guard let workspace = obj.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject else { return }
-        
-        // 注入私有启动参数：要求挂起并隐藏启动，绝对不能触发前台 UI 跳转
-        let options = NSMutableDictionary()
-        options.setValue(NSNumber(value: true), forKey: "__ActivateSuspended")
-        options.setValue(NSNumber(value: true), forKey: "__ActivateHidden")
-        
-        let selector = Selector(("openApplicationWithBundleID:options:"))
-        if workspace.responds(to: selector) {
-            workspace.perform(selector, with: "com.apple.PosterBoard", with: options)
-            print("🚀 已向系统发送静默后台唤醒 PosterBoard 的指令")
-        }
     }
     
     private func unzipFile(at sourceUrl: URL) throws -> URL {
@@ -319,7 +317,7 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 删除流程 (点击杀首刀 -> 处理数据 -> 真实后台静默启动 -> 挂起3秒 -> 绝杀)
+    // 删除流程 (杀首刀 -> 删数据 -> 8秒绝对压制)
     // ============================================
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
         // 1. 暴力解开 SQLite 锁
@@ -334,14 +332,10 @@ class PosterBoardManager: ObservableObject {
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 3. 强行在后台唤醒 PosterBoard 进程，让它去读取最新的数据库 (无 UI 跳转)
-        openPosterBoardSilently()
+        // 3. 执行 8 秒绝对压制 (每 0.1 秒秒杀诈尸进程)
+        enforceSuppression(for: 8.0)
         
-        // 4. 阻塞当前线程 3 秒，让刚被唤醒的 PosterBoard 有时间处理数据
-        Thread.sleep(forTimeInterval: 3.0)
-        
-        // 5. 3秒到期，再次击杀释放句柄，然后通知 SpringBoard 刷新 UI
-        killDaemons()
+        // 4. 压制结束后广播通知系统刷新
         broadcastDarwinNotifications()
         
         DispatchQueue.main.async {
@@ -350,17 +344,18 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 应用流程 (写数据前杀 -> 写入 -> 真实后台静默启动 -> 等3秒 -> 绝杀)
+    // 应用流程 (杀首刀 -> 顺序写入多壁纸 -> 8秒绝对压制)
     // ============================================
     func applyTendies() throws {
         var extList: [String: [URL]] = [:]
+        
+        // 预处理：解析视频和多选的 Tendies，全部放进 extList 排队
         if videos.count > 0 {
             extList["com.apple.WallpaperKit.CollectionsPoster"] = []
             for video in videos {
                 switch video.loadState {
                 case .loaded(let movie):
                     do {
-                        // 注意：这里处理视频比较慢，会造成弹窗出来前略有卡顿，处理完才会杀进程
                         let newVideo = try VideoHandler.createCaml(from: movie.url, autoReverses: video.autoReverses)
                         extList["com.apple.WallpaperKit.CollectionsPoster"]?.append(newVideo)
                     } catch {
@@ -370,8 +365,6 @@ class PosterBoardManager: ObservableObject {
                 }
             }
         }
-        
-        // 临时解压（不需要杀进程）
         for url in selectedTendies {
             let unzippedDir = try unzipFile(at: url)
             guard let descriptors = try getDescriptorsFromTendie(unzippedDir) else { continue }
@@ -383,13 +376,13 @@ class PosterBoardManager: ObservableObject {
         }
         let extVer = SymHandler.getExtensionVersion()
         
-        // 1. 设置前杀一次：暴力断开写锁
+        // 1. 设置前杀一次：暴力断开写锁，准备安全注入
         killDaemons()
-        Thread.sleep(forTimeInterval: 0.5) // 给定句柄释放时间
+        Thread.sleep(forTimeInterval: 0.5) 
         
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         
-        // 2. 物理直写 + SQLite 三表强行注入
+        // 2. 物理直写 + SQLite 按顺序依次强行注入 (这里的 for 循环天然保证了多壁纸是同步按顺序执行的)
         for (ext, descriptorsList) in extList {
             let targetDir = URL(fileURLWithPath: "\(containerPath)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)/Extensions/\(ext)/descriptors")
             
@@ -415,7 +408,7 @@ class PosterBoardManager: ObservableObject {
                             importedFolders.append(uniqueFolderUUID)
                         }
                         
-                        // 注入三表
+                        // 顺序单线程调用 SQLite 注入，保证不冲突
                         injectIntoDatabase(uuid: uniqueFolderUUID, providerId: ext, isDelete: false)
                     }
                 }
@@ -424,23 +417,17 @@ class PosterBoardManager: ObservableObject {
         
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 清理本地临时文件
+        // 临时解压垃圾清理
         for url in selectedTendies {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent("UnzipItems", conformingTo: .directory))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.lastPathComponent))
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
-        // 3. 强行在后台唤醒 PosterBoard，使其以幽灵模式建构缓存
-        openPosterBoardSilently()
+        // 3. 所有壁纸数据完美写入后，开启 8 秒“漏头就秒”绝对压制期
+        enforceSuppression(for: 8.0)
         
-        // 4. 等待 3 秒让其完成读表和渲染
-        Thread.sleep(forTimeInterval: 3.0)
-        
-        // 5. 3 秒到期后，将其击杀收尾
-        killDaemons()
-        
-        // 再次发送广播让 SpringBoard 意识到锁屏环境已更新
+        // 4. 彻底压制完毕后，释放系统广播通知刷新
         broadcastDarwinNotifications()
         
         DispatchQueue.main.async {
