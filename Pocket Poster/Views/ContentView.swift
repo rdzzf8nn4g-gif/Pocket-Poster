@@ -54,22 +54,24 @@ struct ContentView: View {
                     }
                 }
                 
-                // 【操作面板：Apply 在上方】
+                // 【应用区：配合底层 5 秒长阻塞流水线】
                 Section {
                     VStack {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
                             Button(action: {
                                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                                UIApplication.shared.alert(title: NSLocalizedString("Applying Wallpapers...", comment: ""), body: NSLocalizedString("Please wait", comment: ""), animated: false, withButton: false)
+                                // 呼出全局阻塞弹窗，底层流水线的 5 秒等待会在此框下同步完成
+                                UIApplication.shared.alert(title: NSLocalizedString("Applying Wallpapers...", comment: ""), body: NSLocalizedString("Please wait...", comment: ""), animated: false, withButton: false)
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 调用终极版重构后的 applyTendies（内部已自动完成了断锁、注入、物理写入和两秒双杀机制）
+                                        // 核心操作：内部包含了杀进程 -> 写入 -> 杀进程 -> 等待 5 秒 -> 杀进程的所有流
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
                                         
                                         DispatchQueue.main.async {
+                                            // 全部操作且时间流结束后，关闭弹窗
                                             UIApplication.shared.dismissAlert(animated: false)
                                             PosterBoardManager.shared.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
@@ -115,7 +117,7 @@ struct ContentView: View {
                     Label("Actions", systemImage: "hammer")
                 }
                 
-                // 【已精确过滤的自定壁纸删除列表】
+                // 【删除区：配合底层 6 秒阻塞弹窗流水线】
                 if !pbManager.appliedWallpapers.isEmpty {
                     Section {
                         ForEach(pbManager.appliedWallpapers) { wallpaper in
@@ -131,15 +133,21 @@ struct ContentView: View {
                                 Spacer()
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    // 放入异步队列，因为内部有睡眠操作和双杀机制，防止阻塞 UI
+                                    // 唤起专属的删除全局阻塞等待框
+                                    UIApplication.shared.alert(title: NSLocalizedString("Deleting...", comment: ""), body: NSLocalizedString("Please wait 6 seconds", comment: ""), animated: false, withButton: false)
+                                    
                                     DispatchQueue.global(qos: .userInitiated).async {
                                         do {
+                                            // 核心操作：包含了瞬间杀进程 -> 剔除库 -> 强制等待 6 秒 -> 补杀进程
                                             try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
                                             DispatchQueue.main.async {
+                                                // 6 秒结束后，关闭弹窗并震动反馈
+                                                UIApplication.shared.dismissAlert(animated: false)
                                                 Haptic.shared.notify(.success)
                                             }
                                         } catch {
                                             DispatchQueue.main.async {
+                                                UIApplication.shared.dismissAlert(animated: false)
                                                 UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
                                             }
                                         }
