@@ -60,12 +60,12 @@ struct ContentView: View {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
                             Button(action: {
                                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                                // 统一替换为 "应用中..." 提示框
+                                // 永远保持显示"应用中..."的纯净体验
                                 UIApplication.shared.alert(title: NSLocalizedString("应用中...", comment: ""), body: "", animated: false, withButton: false)
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 核心操作：写完后强力压制后台 8 秒，结束后会自动跳前台
+                                        // 核心操作：写完后强力压制后台 6 秒
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
@@ -189,7 +189,7 @@ struct ContentView: View {
                             }
                         }
                     } header: {
-                        Label("已导入的第三方自定壁纸 (点击垃圾桶单个删除并即时刷新)", systemImage: "photo.stack.fill")
+                        Label("已导入自定壁纸", systemImage: "photo.stack.fill")
                     }
                 }
             }
