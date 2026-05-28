@@ -54,7 +54,6 @@ struct ContentView: View {
                     }
                 }
                 
-                // 【操作面板：Apply】
                 Section {
                     VStack {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
@@ -64,7 +63,7 @@ struct ContentView: View {
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 【修复】直接使用 shared 单例，避开 SwiftUI 闭包推断 Bug
+                                        // 调用终极版重构后的 applyTendies（内部已自动完成了断锁、注入和静默自愈）
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
@@ -73,9 +72,6 @@ struct ContentView: View {
                                             UIApplication.shared.dismissAlert(animated: false)
                                             PosterBoardManager.shared.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
-                                            
-                                            // 自动下发环境重载自愈指令，让新壁纸无缝、实时地被系统认出
-                                            PosterBoardManager.shared.refreshPosterBoardSystem()
                                         }
                                     } catch CocoaError.fileWriteUnknown {
                                         self.presentError(ApplyError.wrongAppHash)
@@ -98,7 +94,6 @@ struct ContentView: View {
                                     return
                                 }
                                 UIApplication.shared.confirmAlert(title: NSLocalizedString("Reset Collections", comment: ""), body: NSLocalizedString("Do you want to reset collections?", comment: ""), onOK: {
-                                    // 【修复】直接使用 shared 单例
                                     if PosterBoardManager.shared.setSystemLanguage(to: lang) {
                                         UIApplication.shared.alert(title: NSLocalizedString("Collections Successfully Reset!", comment: ""), body: NSLocalizedString("Your PosterBoard will refresh automatically.", comment: ""))
                                     } else {
@@ -119,7 +114,6 @@ struct ContentView: View {
                     Label("Actions", systemImage: "hammer")
                 }
                 
-                // 【已精确过滤的自定壁纸删除列表】
                 if !pbManager.appliedWallpapers.isEmpty {
                     Section {
                         ForEach(pbManager.appliedWallpapers) { wallpaper in
@@ -135,15 +129,19 @@ struct ContentView: View {
                                 Spacer()
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    do {
-                                        // 1. 删除目标物理文件
-                                        try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
-                                        Haptic.shared.notify(.success)
-                                        
-                                        // 2. 触发后台轻量重载，使删除干净、绝不留白
-                                        PosterBoardManager.shared.refreshPosterBoardSystem()
-                                    } catch {
-                                        UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
+                                    // 【核心修复】：删除操作也必须放进异步队列中执行，因为我们在底层加了 0.8s 的 WAL 锁释放休眠时间
+                                    // 放在异步可以保证 UI 绝对不会卡顿结冰
+                                    DispatchQueue.global(qos: .userInitiated).async {
+                                        do {
+                                            try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
+                                            DispatchQueue.main.async {
+                                                Haptic.shared.notify(.success)
+                                            }
+                                        } catch {
+                                            DispatchQueue.main.async {
+                                                UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
+                                            }
+                                        }
                                     }
                                 }) {
                                     Image(systemName: "trash")
