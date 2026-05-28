@@ -160,13 +160,12 @@ struct ContentView: View {
                             }
                         }
                     } header: {
-                        Label("已导入的第三方自定壁纸 (点击垃圾桶单个删除并即时刷新)", systemImage: "photo.stack.fill")
+                        Label("已导入的第三方自定壁纸 (点击垃圾桶单个删除并即时生效)", systemImage: "photo.stack.fill")
                     }
                 }
             }
             .navigationTitle("Pocket Poster")
             .toolbar {
-                // 【修复：将外部网页链接恢复为 App 内部的 ExploreView 页面】
                 ToolbarItem(placement: .topBarLeading) {
                     NavigationLink(destination: ExploreView()) {
                         Image(systemName: "safari")
