@@ -73,7 +73,7 @@ class PosterBoardManager: ObservableObject {
         
         var db: OpaquePointer?
         if sqlite3_open(dbPath, &db) == SQLITE_OK {
-            // 设置 2000ms 的超时等待，防止进程偶尔诈尸锁库时发生崩溃
+            // 设置 2000ms 的超时等待，防止偶尔的库锁定
             sqlite3_exec(db, "PRAGMA busy_timeout = 2000;", nil, nil, nil)
             var stmt: OpaquePointer?
             
@@ -113,7 +113,7 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【底层系统级暴击：根据进程名查找 PID 并发送 SIGKILL (9号信号)】
+    // 【底层系统级暴击：根据进程名查找 PID 并发送 SIGKILL】
     private func forceKillProcessByName(_ targetName: String) {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
         var size: Int = 0
@@ -134,7 +134,6 @@ class PosterBoardManager: ObservableObject {
                 }
                 
                 if procName == targetName {
-                    // print("🔪 成功捕获并爆破进程: \(targetName) (PID: \(pid))")
                     kill(pid, SIGKILL) 
                 }
             }
@@ -145,10 +144,10 @@ class PosterBoardManager: ObservableObject {
     private func killDaemons() {
         forceKillProcessByName("PosterBoard")
         forceKillProcessByName("wallpaperd")
-        forceKillProcessByName("CollectionsPoster") // 你的新要求：新增 CollectionsPoster 进程
+        forceKillProcessByName("CollectionsPoster") // 适配多进程猎杀
     }
     
-    // 【全新机制：8秒高频轮询绝对压制，漏头就秒】
+    // 【高频轮询绝对压制，漏头就秒】
     private func enforceSuppression(for seconds: TimeInterval) {
         print("🛡️ 开始执行 \(seconds) 秒的绝对压制，漏头就秒...")
         let endTime = Date().addingTimeInterval(seconds)
@@ -167,6 +166,7 @@ class PosterBoardManager: ObservableObject {
         CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.posterkit.descriptors.changed" as CFString), nil, nil, true)
     }
     
+    // 【显式启动方法：带前台跳转】
     func openPosterBoard() -> Bool {
         guard let obj = objc_getClass("LSApplicationWorkspace") as? NSObject else { return false }
         let workspace = obj.perform(Selector(("defaultWorkspace")))?.takeUnretainedValue() as? NSObject
@@ -317,7 +317,34 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 删除流程 (杀首刀 -> 删数据 -> 8秒绝对压制)
+    // 全部删除流程 (删数据 -> 3秒绝对压制)
+    // ============================================
+    func deleteAllAppliedWallpapers() throws {
+        // 1. 暴力解开 SQLite 锁
+        killDaemons()
+        Thread.sleep(forTimeInterval: 0.5)
+        
+        // 2. 擦除所有已导入壁纸的文件与数据库条目
+        for wallpaper in appliedWallpapers {
+            try? FileManager.default.removeItem(at: wallpaper.path)
+            injectIntoDatabase(uuid: wallpaper.folderName, providerId: wallpaper.extensionType, isDelete: true)
+        }
+        
+        UserDefaults.standard.set([], forKey: "ImportedWallpaperFolders")
+        
+        // 3. 执行 3 秒绝对压制
+        enforceSuppression(for: 3.0)
+        
+        // 4. 通知系统刷新
+        broadcastDarwinNotifications()
+        
+        DispatchQueue.main.async {
+            self.fetchAppliedWallpapers()
+        }
+    }
+    
+    // ============================================
+    // 单个删除流程 (删数据 -> 3秒绝对压制)
     // ============================================
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
         // 1. 暴力解开 SQLite 锁
@@ -332,8 +359,8 @@ class PosterBoardManager: ObservableObject {
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 3. 执行 8 秒绝对压制 (每 0.1 秒秒杀诈尸进程)
-        enforceSuppression(for: 8.0)
+        // 3. 执行 3 秒绝对压制 (每 0.1 秒秒杀诈尸进程)
+        enforceSuppression(for: 3.0)
         
         // 4. 压制结束后广播通知系统刷新
         broadcastDarwinNotifications()
@@ -344,7 +371,7 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 应用流程 (杀首刀 -> 顺序写入多壁纸 -> 8秒绝对压制)
+    // 应用流程 (顺序写入多壁纸 -> 8秒绝对压制 -> 前台跳转)
     // ============================================
     func applyTendies() throws {
         var extList: [String: [URL]] = [:]
@@ -382,7 +409,7 @@ class PosterBoardManager: ObservableObject {
         
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         
-        // 2. 物理直写 + SQLite 按顺序依次强行注入 (这里的 for 循环天然保证了多壁纸是同步按顺序执行的)
+        // 2. 物理直写 + SQLite 按顺序依次强行注入 (天然保证了多壁纸同步按顺序)
         for (ext, descriptorsList) in extList {
             let targetDir = URL(fileURLWithPath: "\(containerPath)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)/Extensions/\(ext)/descriptors")
             
@@ -427,10 +454,12 @@ class PosterBoardManager: ObservableObject {
         // 3. 所有壁纸数据完美写入后，开启 8 秒“漏头就秒”绝对压制期
         enforceSuppression(for: 8.0)
         
-        // 4. 彻底压制完毕后，释放系统广播通知刷新
+        // 4. 彻底压制完毕后，释放系统广播通知
         broadcastDarwinNotifications()
         
+        // 5. 跳转打开海报版 (PosterBoard) 并刷新 UI
         DispatchQueue.main.async {
+            let _ = self.openPosterBoard()
             self.fetchAppliedWallpapers()
         }
     }
