@@ -60,12 +60,12 @@ struct ContentView: View {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
                             Button(action: {
                                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                                // 呼出 8 秒等待弹窗，覆盖背后的 8 秒压制期
-                                UIApplication.shared.alert(title: NSLocalizedString("Applying...", comment: ""), body: NSLocalizedString("Please wait 8 seconds...", comment: ""), animated: false, withButton: false)
+                                // 统一替换为 "应用中..." 提示框
+                                UIApplication.shared.alert(title: NSLocalizedString("应用中...", comment: ""), body: "", animated: false, withButton: false)
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 核心操作：写完后强力压制后台 8 秒
+                                        // 核心操作：写完后强力压制后台 8 秒，结束后会自动跳前台
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
@@ -89,6 +89,7 @@ struct ContentView: View {
                             }
                             .buttonStyle(TintedButton(color: .blue, fullwidth: true))
                         }
+                        
                         Button(action: {
                             if #available(iOS 18.0, *) {
                                 guard let lang = UserDefaults.standard.stringArray(forKey: "AppleLanguages")?.first else {
@@ -109,6 +110,36 @@ struct ContentView: View {
                             Label("Reset Collections", systemImage: "arrow.clockwise.circle")
                         }
                         .buttonStyle(TintedButton(color: .red, fullwidth: true))
+                        
+                        // 【新增：全部删除按钮】
+                        if !pbManager.appliedWallpapers.isEmpty {
+                            Button(action: {
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                UIApplication.shared.confirmAlert(title: NSLocalizedString("删除全部", comment: ""), body: NSLocalizedString("确定要删除全部已导入的自定壁纸吗？", comment: ""), onOK: {
+                                    // 统一替换为 "应用中..." 提示框
+                                    UIApplication.shared.alert(title: NSLocalizedString("应用中...", comment: ""), body: "", animated: false, withButton: false)
+                                    
+                                    DispatchQueue.global(qos: .userInitiated).async {
+                                        do {
+                                            // 全部删除：3秒压制且不跳转
+                                            try PosterBoardManager.shared.deleteAllAppliedWallpapers()
+                                            DispatchQueue.main.async {
+                                                UIApplication.shared.dismissAlert(animated: false)
+                                                Haptic.shared.notify(.success)
+                                            }
+                                        } catch {
+                                            DispatchQueue.main.async {
+                                                UIApplication.shared.dismissAlert(animated: false)
+                                                UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
+                                            }
+                                        }
+                                    }
+                                }, noCancel: false)
+                            }) {
+                                Label("删除全部已导入壁纸", systemImage: "trash.slash.circle")
+                            }
+                            .buttonStyle(TintedButton(color: .red, fullwidth: true))
+                        }
                     }
                     .listRowInsets(EdgeInsets())
                     .padding(7)
@@ -116,7 +147,7 @@ struct ContentView: View {
                     Label("Actions", systemImage: "hammer")
                 }
                 
-                // 【删除区域】
+                // 【单个删除区域】
                 if !pbManager.appliedWallpapers.isEmpty {
                     Section {
                         ForEach(pbManager.appliedWallpapers) { wallpaper in
@@ -132,12 +163,12 @@ struct ContentView: View {
                                 Spacer()
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    // 唤起专属的 8 秒删除等待弹窗
-                                    UIApplication.shared.alert(title: NSLocalizedString("Deleting...", comment: ""), body: NSLocalizedString("Please wait 8 seconds...", comment: ""), animated: false, withButton: false)
+                                    // 统一替换为 "应用中..." 提示框
+                                    UIApplication.shared.alert(title: NSLocalizedString("应用中...", comment: ""), body: "", animated: false, withButton: false)
                                     
                                     DispatchQueue.global(qos: .userInitiated).async {
                                         do {
-                                            // 核心操作：删完后强力压制后台 8 秒
+                                            // 单个删除：3秒压制且不跳转
                                             try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
                                             DispatchQueue.main.async {
                                                 UIApplication.shared.dismissAlert(animated: false)
