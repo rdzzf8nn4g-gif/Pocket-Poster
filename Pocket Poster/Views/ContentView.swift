@@ -64,7 +64,7 @@ struct ContentView: View {
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 【修复】直接使用 shared 单例，避开 SwiftUI 闭包推断 Bug
+                                        // 调用终极版重构后的 applyTendies（内部已自动完成了断锁、注入、物理写入和两秒双杀机制）
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
@@ -95,7 +95,6 @@ struct ContentView: View {
                                     return
                                 }
                                 UIApplication.shared.confirmAlert(title: NSLocalizedString("Reset Collections", comment: ""), body: NSLocalizedString("Do you want to reset collections?", comment: ""), onOK: {
-                                    // 【修复】直接使用 shared 单例
                                     if PosterBoardManager.shared.setSystemLanguage(to: lang) {
                                         UIApplication.shared.alert(title: NSLocalizedString("Collections Successfully Reset!", comment: ""), body: NSLocalizedString("Your PosterBoard will refresh automatically.", comment: ""))
                                     } else {
@@ -132,7 +131,7 @@ struct ContentView: View {
                                 Spacer()
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    // 【核心修复】：删除操作也必须放进异步队列中执行，因为我们在底层加了 0.8s 的 WAL 锁释放休眠时间
+                                    // 放入异步队列，因为内部有睡眠操作和双杀机制，防止阻塞 UI
                                     DispatchQueue.global(qos: .userInitiated).async {
                                         do {
                                             try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
