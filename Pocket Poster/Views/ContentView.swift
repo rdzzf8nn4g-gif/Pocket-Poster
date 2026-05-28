@@ -54,24 +54,24 @@ struct ContentView: View {
                     }
                 }
                 
-                // 【应用区：配合底层 5 秒长阻塞流水线】
+                // 【应用区域】
                 Section {
                     VStack {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
                             Button(action: {
                                 UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                                // 呼出全局阻塞弹窗，底层流水线的 5 秒等待会在此框下同步完成
-                                UIApplication.shared.alert(title: NSLocalizedString("Applying Wallpapers...", comment: ""), body: NSLocalizedString("Please wait...", comment: ""), animated: false, withButton: false)
+                                // 立刻呼出弹窗，覆盖整个长达 5 秒的底层操作轴
+                                UIApplication.shared.alert(title: NSLocalizedString("Applying...", comment: ""), body: NSLocalizedString("Please wait 5 seconds...", comment: ""), animated: false, withButton: false)
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        // 核心操作：内部包含了杀进程 -> 写入 -> 杀进程 -> 等待 5 秒 -> 杀进程的所有流
+                                        // 核心操作：内部包含了 [杀 -> 写 -> 杀 -> 等5秒 -> 绝杀] 的完整时序
                                         try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
                                         try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
                                         
                                         DispatchQueue.main.async {
-                                            // 全部操作且时间流结束后，关闭弹窗
+                                            // 全部操作(包含5秒休眠)执行完毕后，才关闭弹窗
                                             UIApplication.shared.dismissAlert(animated: false)
                                             PosterBoardManager.shared.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
@@ -117,7 +117,7 @@ struct ContentView: View {
                     Label("Actions", systemImage: "hammer")
                 }
                 
-                // 【删除区：配合底层 6 秒阻塞弹窗流水线】
+                // 【删除区域】
                 if !pbManager.appliedWallpapers.isEmpty {
                     Section {
                         ForEach(pbManager.appliedWallpapers) { wallpaper in
@@ -133,15 +133,15 @@ struct ContentView: View {
                                 Spacer()
                                 Button(action: {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    // 唤起专属的删除全局阻塞等待框
-                                    UIApplication.shared.alert(title: NSLocalizedString("Deleting...", comment: ""), body: NSLocalizedString("Please wait 6 seconds", comment: ""), animated: false, withButton: false)
+                                    // 唤起专属的 6 秒删除等待弹窗
+                                    UIApplication.shared.alert(title: NSLocalizedString("Deleting...", comment: ""), body: NSLocalizedString("Please wait 6 seconds...", comment: ""), animated: false, withButton: false)
                                     
                                     DispatchQueue.global(qos: .userInitiated).async {
                                         do {
-                                            // 核心操作：包含了瞬间杀进程 -> 剔除库 -> 强制等待 6 秒 -> 补杀进程
+                                            // 核心操作：内部包含了 [杀 -> 删 -> 等6秒 -> 绝杀]
                                             try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
                                             DispatchQueue.main.async {
-                                                // 6 秒结束后，关闭弹窗并震动反馈
+                                                // 6秒流水线跑完后，关闭界面遮罩
                                                 UIApplication.shared.dismissAlert(animated: false)
                                                 Haptic.shared.notify(.success)
                                             }
