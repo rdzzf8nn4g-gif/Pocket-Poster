@@ -112,7 +112,6 @@ class PosterBoardManager: ObservableObject {
     }
     
     // 【终极武器：将 Objective-C 的 sysctl + kill 纯底层逻辑翻译为 Swift】
-    // 配合特权 Entitlements，这是 iOS 上最绝对的杀进程手段
     private func forceKillProcessByName(_ targetName: String) {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
         var size: Int = 0
@@ -303,12 +302,12 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 【全新时间轴】：删除流程 (点击杀首刀 -> 处理数据 -> 挂起6秒 -> 杀二刀)
+    // 删除流程 (点击杀首刀 -> 处理数据 -> 静默唤醒 -> 挂起3秒 -> 绝杀)
     // ============================================
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
-        // 1. 点击就直接杀一次，物理暴力解开 SQLite 锁
+        // 1. 暴力解开 SQLite 锁
         killDaemons()
-        Thread.sleep(forTimeInterval: 0.5) // 给定句柄释放时间
+        Thread.sleep(forTimeInterval: 0.5) 
         
         // 2. 擦除物理文件与数据库条目
         try FileManager.default.removeItem(at: wallpaper.path)
@@ -318,10 +317,13 @@ class PosterBoardManager: ObservableObject {
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
-        // 3. 阻塞当前线程 6 秒（前端的弹窗将会刚好转满这 6 秒）
-        Thread.sleep(forTimeInterval: 6.0)
+        // 3. 利用 Darwin 通知触发后台静默唤醒，让系统自动开始处理新数据
+        broadcastDarwinNotifications()
         
-        // 4. 6秒到期，执行最后一次清扫，确保如果进程诈尸也会被干掉
+        // 4. 阻塞当前线程 3 秒，让 PosterBoard 在后台处理数据
+        Thread.sleep(forTimeInterval: 3.0)
+        
+        // 5. 3秒到期，执行清扫防诈尸，并再次通知 SpringBoard 刷新
         killDaemons()
         broadcastDarwinNotifications()
         
@@ -331,7 +333,7 @@ class PosterBoardManager: ObservableObject {
     }
     
     // ============================================
-    // 【全新时间轴】：应用流程 (杀首刀 -> 写数据 -> 杀二刀 -> 挂起5秒 -> 杀三刀)
+    // 应用流程 (写数据前杀 -> 写入 -> 后台静默唤醒 -> 等3秒 -> 绝杀)
     // ============================================
     func applyTendies() throws {
         var extList: [String: [URL]] = [:]
@@ -341,6 +343,7 @@ class PosterBoardManager: ObservableObject {
                 switch video.loadState {
                 case .loaded(let movie):
                     do {
+                        // 注意：这里处理视频比较慢，可能会造成弹窗出来前略有卡顿，但它确确实实处理完才会杀进程
                         let newVideo = try VideoHandler.createCaml(from: movie.url, autoReverses: video.autoReverses)
                         extList["com.apple.WallpaperKit.CollectionsPoster"]?.append(newVideo)
                     } catch {
@@ -411,14 +414,16 @@ class PosterBoardManager: ObservableObject {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
-        // 3. 设置成功后杀一次（保护刚注入的数据库不被进程的脏内存覆盖）
+        // 3. 通知系统在后台静默唤醒并处理刚刚写入的数据
+        broadcastDarwinNotifications()
+        
+        // 4. 进入强制挂起期，等待 3 秒 (此时系统正在后台疯狂建缓存)
+        Thread.sleep(forTimeInterval: 3.0)
+        
+        // 5. 3 秒到期后，为防止进程长期占用产生脏数据，进行防诈尸绝杀
         killDaemons()
         
-        // 4. 进入强制挂起期，等待 5 秒（前端弹窗将会完美覆盖这 5 秒）
-        Thread.sleep(forTimeInterval: 5.0)
-        
-        // 5. 5 秒到期后，如果进程重启期间产生了脏数据，进行防诈尸绝杀
-        killDaemons()
+        // 再次通知刷新 UI
         broadcastDarwinNotifications()
         
         DispatchQueue.main.async {
