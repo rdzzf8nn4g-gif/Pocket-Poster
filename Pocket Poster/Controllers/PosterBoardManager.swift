@@ -40,7 +40,7 @@ class PosterBoardManager: ObservableObject {
         return tendiesStoreURL
     }
     
-    // 【已修复：补回遗漏的语系控制方法，解决 ContentView 编译报错】
+    // 【系统语系无感变更钩子】
     func setSystemLanguage(to new_lang: String) -> Bool {
         var langManager: NSObject = NSObject()
         if #available(iOS 18.0, *) {
@@ -55,7 +55,7 @@ class PosterBoardManager: ObservableObject {
         return success != nil
     }
     
-    // 【核心黑科技：在复杂的沙盒中精准定位 SQLite 数据库文件】
+    // 【精准定位系统沙盒中的海报版 SQLite 数据库】
     private func findDatabasePath() -> String? {
         guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") else { return nil }
         let dataStoreURL = URL(fileURLWithPath: "\(containerPath)/Library/Application Support/PRBPosterExtensionDataStore")
@@ -70,18 +70,18 @@ class PosterBoardManager: ObservableObject {
         return nil
     }
     
-    // 【核心黑科技：根据提取的数据库结构，执行三表联合的高精度注入】
+    // 【三表微创注入/剔除：严格满足 iOS 17 的外键 CASCADE 级联约束】
     private func injectIntoDatabase(uuid: String, providerId: String, isDelete: Bool) {
         guard let dbPath = findDatabasePath() else { return }
         
         var db: OpaquePointer?
         if sqlite3_open(dbPath, &db) == SQLITE_OK {
-            // 设定超时时间，防止极低概率的系统高频占用
+            // 设定写锁超时，防止与残留系统服务撞车
             sqlite3_exec(db, "PRAGMA busy_timeout = 2000;", nil, nil, nil)
             var stmt: OpaquePointer?
             
             if isDelete {
-                // 删除时：基于系统内设的 ON DELETE CASCADE 结构，只需删除主表 poster 即可引发级联删除
+                // 删除时：基于系统的 ON DELETE CASCADE 约束，只需删主表即可
                 let deleteQuery = "DELETE FROM poster WHERE UUID = ?;"
                 if sqlite3_prepare_v2(db, deleteQuery, -1, &stmt, nil) == SQLITE_OK {
                     sqlite3_bind_text(stmt, 1, (uuid as NSString).utf8String, -1, nil)
@@ -89,7 +89,7 @@ class PosterBoardManager: ObservableObject {
                 }
                 sqlite3_finalize(stmt)
             } else {
-                // 写入时：必须严格向三张表中同时注入数据，满足 iOS 17 的外键约束！
+                // 写入时：必须三表联动注入，彻底满足系统底层校验！
                 
                 // 1. 注入 poster 主表
                 let insertPoster = "INSERT OR IGNORE INTO poster (UUID, providerId) VALUES (?, ?);"
@@ -100,7 +100,7 @@ class PosterBoardManager: ObservableObject {
                 }
                 sqlite3_finalize(stmt)
                 
-                // 2. 注入 posterRoleMembership 角色绑定表
+                // 2. 注入 posterRoleMembership 映射表
                 let insertRole = "INSERT OR IGNORE INTO posterRoleMembership (posterUUID, roleId, roleSortKey) VALUES (?, 'PRPosterRoleLockScreen', 0);"
                 if sqlite3_prepare_v2(db, insertRole, -1, &stmt, nil) == SQLITE_OK {
                     sqlite3_bind_text(stmt, 1, (uuid as NSString).utf8String, -1, nil)
@@ -113,7 +113,6 @@ class PosterBoardManager: ObservableObject {
                 let insertAttr = "INSERT OR IGNORE INTO posterAttributes (posterUUID, roleId, attributeIdentifier, attributePayload) VALUES (?, 'PRPosterRoleLockScreen', 'PRPosterRoleAttributeTypeUsageMetadata', ?);"
                 if sqlite3_prepare_v2(db, insertAttr, -1, &stmt, nil) == SQLITE_OK {
                     sqlite3_bind_text(stmt, 1, (uuid as NSString).utf8String, -1, nil)
-                    // 注意：这里的 payload 使用 UTF8，满足 SQLite 的存储要求
                     sqlite3_bind_text(stmt, 2, (payload as NSString).utf8String, -1, nil)
                     sqlite3_step(stmt)
                 }
@@ -130,15 +129,31 @@ class PosterBoardManager: ObservableObject {
         return success != nil
     }
     
-    // 独立轻量级系统环境唤醒钩子
+    // 【全新加入的双杀机制：杀一次 -> 等2秒 -> 如果还在继续杀 -> 结束】
     func refreshPosterBoardSystem() {
         DispatchQueue.global(qos: .userInitiated).async {
+            // 1. 清空残余图片快照
             if let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") {
                 let cacheDir = URL(fileURLWithPath: "\(containerPath)/Library/Caches/com.apple.PosterBoard")
                 if FileManager.default.fileExists(atPath: cacheDir.path) {
                     try? FileManager.default.removeItem(at: cacheDir)
                 }
             }
+            
+            // 2. 核心击杀协议：两秒双杀机制 (Double-Tap Kill)
+            // 第一次：常规执行杀掉海报版进程及其关联渲染进程
+            Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: "First Kill PosterBoard")
+            Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.wallpaperd", forReason: Int64(1), andReport: false, withDescription: "First Kill Wallpaperd")
+            
+            // 等待两秒
+            Thread.sleep(forTimeInterval: 2.0)
+            
+            // 第二次：补枪绝杀，防止守护进程在极速重启时加载了不完整的旧缓存
+            // (系统级强杀，如果进程已死会自动忽略无副作用；如果依然存在或刚重启，直接二次爆破)
+            Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: "Double Tap Kill PosterBoard")
+            Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.wallpaperd", forReason: Int64(1), andReport: false, withDescription: "Double Tap Kill Wallpaperd")
+            
+            // 3. 发送全局广播，通知系统刷新结束
             let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
             CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.wallpaper.changed" as CFString), nil, nil, true)
             CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.posterkit.descriptors.changed" as CFString), nil, nil, true)
@@ -243,7 +258,7 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【白名单过滤：100% 隔离系统官方自带壁纸】
+    // 【白名单过滤：100% 隔离隐藏系统官方自带壁纸】
     func fetchAppliedWallpapers() {
         var list: [AppliedWallpaper] = []
         guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") else { return }
@@ -263,7 +278,7 @@ class PosterBoardManager: ObservableObject {
                 let folderName = item.lastPathComponent
                 if folderName == "__MACOSX" { continue }
                 
-                // 仅允许白名单内包含的第三方壁纸展现，精准过滤掉系统官方配置
+                // 仅允许白名单内包含的自定壁纸展现
                 if importedFolders.contains(folderName) {
                     var displayName = folderName
                     let plistURL = item.appendingPathComponent("Wallpaper.plist")
@@ -289,16 +304,16 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【删除操作：强杀断锁 -> 休眠释放 -> 擦文件 -> 库注入】
+    // 【删除操作流程】
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
-        // 1. 强杀进程，解开 SQLite 的 WAL 死锁
+        // 1. 强杀系统守护进程断开 SQLite 锁
         Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: "Unlock SQLite")
         Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.wallpaperd", forReason: Int64(1), andReport: false, withDescription: "Unlock SQLite")
         
-        // 2. 线程休眠 0.8 秒，确保系统的文件句柄彻底释放
+        // 2. 线程休眠 0.8 秒，确保 WAL 文件句柄彻底释放
         Thread.sleep(forTimeInterval: 0.8)
         
-        // 3. 擦除物理文件，执行精准的微创 DELETE 注入，完美保护官方数据
+        // 3. 擦除物理文件，执行微创 DELETE 注入数据库
         try FileManager.default.removeItem(at: wallpaper.path)
         injectIntoDatabase(uuid: wallpaper.folderName, providerId: wallpaper.extensionType, isDelete: true)
         
@@ -306,13 +321,14 @@ class PosterBoardManager: ObservableObject {
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
         
+        // 4. 更新前端列表并执行双杀自愈刷新
         DispatchQueue.main.async {
             self.fetchAppliedWallpapers()
             self.refreshPosterBoardSystem()
         }
     }
     
-    // 【写入操作：强杀断锁 -> 休眠释放 -> 移文件 -> 三表库注入】
+    // 【写入操作流程】
     func applyTendies() throws {
         var extList: [String: [URL]] = [:]
         if videos.count > 0 {
@@ -346,17 +362,16 @@ class PosterBoardManager: ObservableObject {
         }
         let extVer = SymHandler.getExtensionVersion()
         
-        // --- 核心手术开始：完全避免写锁冲突 ---
-        // 1. 强杀正在占用数据库的系统 Daemon 守护进程！
+        // 1. 强杀系统守护进程断开 SQLite 锁
         Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: "Unlock SQLite")
         Dynamic.FBSSystemService.sharedService().terminateApplication("com.apple.wallpaperd", forReason: Int64(1), andReport: false, withDescription: "Unlock SQLite")
         
-        // 2. 给系统 0.8 秒的时间释放底层的 WAL 数据库文件句柄死锁
+        // 2. 线程休眠 0.8 秒
         Thread.sleep(forTimeInterval: 0.8)
         
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         
-        // 3. 在完全无锁的安全环境下，放开手脚去物理直写和进行三表全态 SQLite 注入
+        // 3. 物理直写 + SQLite 三表联动强行注入
         for (ext, descriptorsList) in extList {
             let targetDir = URL(fileURLWithPath: "\(containerPath)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)/Extensions/\(ext)/descriptors")
             
@@ -369,7 +384,7 @@ class PosterBoardManager: ObservableObject {
                     if descr.lastPathComponent != "__MACOSX" {
                         try randomizeWallpaperId(url: descr)
                         
-                        // 生成苹果原生标准的 UUID 大写字符串，作为物理文件夹和数据库的唯一主键
+                        // 生成苹果原生标准的 UUID 大写字符串
                         let uniqueFolderUUID = UUID().uuidString.uppercased()
                         let destURL = targetDir.appendingPathComponent(uniqueFolderUUID)
                         
@@ -384,7 +399,7 @@ class PosterBoardManager: ObservableObject {
                             importedFolders.append(uniqueFolderUUID)
                         }
                         
-                        // 微创注入 SQLite 三表核心逻辑（在守护进程复活前将其牢牢刻入系统底层）
+                        // 微创注入 SQLite 三表核心逻辑
                         injectIntoDatabase(uuid: uniqueFolderUUID, providerId: ext, isDelete: false)
                     }
                 }
@@ -399,6 +414,7 @@ class PosterBoardManager: ObservableObject {
             try? FileManager.default.removeItem(at: SymHandler.getDocumentsDirectory().appendingPathComponent(url.deletingPathExtension().lastPathComponent))
         }
         
+        // 4. 更新前端列表并执行双杀自愈刷新
         DispatchQueue.main.async {
             self.fetchAppliedWallpapers()
             self.refreshPosterBoardSystem()
