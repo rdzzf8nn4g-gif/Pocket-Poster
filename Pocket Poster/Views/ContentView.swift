@@ -54,7 +54,7 @@ struct ContentView: View {
                     }
                 }
                 
-                // 【位置对调：上移面板】Actions 操作区（包含 Apply 导入壁纸动作按钮）
+                // 【操作面板：Apply】
                 Section {
                     VStack {
                         if !pbManager.selectedTendies.isEmpty || !pbManager.videos.isEmpty {
@@ -64,17 +64,18 @@ struct ContentView: View {
 
                                 DispatchQueue.global(qos: .userInitiated).async {
                                     do {
-                                        try self.pbManager.applyTendies()
+                                        // 【修复】直接使用 shared 单例，避开 SwiftUI 闭包推断 Bug
+                                        try PosterBoardManager.shared.applyTendies()
                                         SymHandler.cleanup()
-                                        try? FileManager.default.removeItem(at: self.pbManager.getTendiesStoreURL())
+                                        try? FileManager.default.removeItem(at: PosterBoardManager.shared.getTendiesStoreURL())
                                         
                                         DispatchQueue.main.async {
                                             UIApplication.shared.dismissAlert(animated: false)
-                                            self.pbManager.selectedTendies.removeAll()
+                                            PosterBoardManager.shared.selectedTendies.removeAll()
                                             Haptic.shared.notify(.success)
                                             
-                                            // 自动执行刷新重载，让新壁纸瞬间加载到系统“收藏”栏中
-                                            self.pbManager.refreshPosterBoardSystem()
+                                            // 自动下发环境重载自愈指令，让新壁纸无缝、实时地被系统认出
+                                            PosterBoardManager.shared.refreshPosterBoardSystem()
                                         }
                                     } catch CocoaError.fileWriteUnknown {
                                         self.presentError(ApplyError.wrongAppHash)
@@ -97,7 +98,8 @@ struct ContentView: View {
                                     return
                                 }
                                 UIApplication.shared.confirmAlert(title: NSLocalizedString("Reset Collections", comment: ""), body: NSLocalizedString("Do you want to reset collections?", comment: ""), onOK: {
-                                    if pbManager.setSystemLanguage(to: lang) {
+                                    // 【修复】直接使用 shared 单例
+                                    if PosterBoardManager.shared.setSystemLanguage(to: lang) {
                                         UIApplication.shared.alert(title: NSLocalizedString("Collections Successfully Reset!", comment: ""), body: NSLocalizedString("Your PosterBoard will refresh automatically.", comment: ""))
                                     } else {
                                         UIApplication.shared.alert(body: "The API failed to call correctly.\nSystem Locale Code: \(lang)")
@@ -117,7 +119,7 @@ struct ContentView: View {
                     Label("Actions", systemImage: "hammer")
                 }
                 
-                // 【位置对调：下移列表】已精确过滤的第三方自定壁纸管理专属列表
+                // 【已精确过滤的自定壁纸删除列表】
                 if !pbManager.appliedWallpapers.isEmpty {
                     Section {
                         ForEach(pbManager.appliedWallpapers) { wallpaper in
@@ -135,11 +137,11 @@ struct ContentView: View {
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                     do {
                                         // 1. 删除目标物理文件
-                                        try self.pbManager.deleteAppliedWallpaper(wallpaper)
+                                        try PosterBoardManager.shared.deleteAppliedWallpaper(wallpaper)
                                         Haptic.shared.notify(.success)
                                         
-                                        // 2. 自动化触发巨魔刷新指令，清除空白图标和脏索引并实时刷新生效
-                                        self.pbManager.refreshPosterBoardSystem()
+                                        // 2. 触发后台轻量重载，使删除干净、绝不留白
+                                        PosterBoardManager.shared.refreshPosterBoardSystem()
                                     } catch {
                                         UIApplication.shared.alert(body: "删除失败: \(error.localizedDescription)")
                                     }
@@ -151,7 +153,7 @@ struct ContentView: View {
                             }
                         }
                     } header: {
-                        Label("已导入的第三方自定壁纸 (点击垃圾桶单个删除并即时重载)", systemImage: "photo.stack.fill")
+                        Label("已导入的第三方自定壁纸 (点击垃圾桶单个删除并即时刷新)", systemImage: "photo.stack.fill")
                     }
                 }
             }
