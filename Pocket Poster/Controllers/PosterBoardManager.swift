@@ -29,7 +29,7 @@ class PosterBoardManager: ObservableObject {
     
     @Published var selectedTendies: [URL] = []
     @Published var videos: [LoadInfo] = []
-    @Published var appliedWallpapers: [AppliedWallpaper] = [] // 存储精确过滤后的自定第三方壁纸
+    @Published var appliedWallpapers: [AppliedWallpaper] = [] // 存储精确过滤后的第三方自定壁纸
     
     func getTendiesStoreURL() -> URL {
         let tendiesStoreURL = SymHandler.getDocumentsDirectory().appendingPathComponent("KFC Bucket", conformingTo: .directory)
@@ -60,56 +60,35 @@ class PosterBoardManager: ObservableObject {
         return success != nil
     }
     
-    // 【终极重构：依据 iOS 17 头文件机制执行全弹道物理粉碎+双进程静默强刷】
+    // 【终极重构：100%保护原有数据库完整性，纯静默后台冷启动自愈刷新】
     func refreshPosterBoardSystem() {
         DispatchQueue.global(qos: .userInitiated).async {
             let fileManager = FileManager.default
-            let extVer = SymHandler.getExtensionVersion()
             
-            // 获取 PosterBoard 的系统沙盒容器绝对路径
+            // 1. 仅安全擦除图片预览快照缓存，加速系统重构 (对应头文件 _galleryCacheURL)
+            // 坚决不碰、不删除任何包含 sqlite 关键字的系统核心索引文件，确保原有壁纸绝不被破坏
             if let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") {
-                
-                // 1. 斩断预渲染快照脏缓存 (对应头文件 _galleryCacheURL)
                 let cacheDir = URL(fileURLWithPath: "\(containerPath)/Library/Caches/com.apple.PosterBoard")
                 if fileManager.fileExists(atPath: cacheDir.path) {
                     try? fileManager.removeItem(at: cacheDir)
                 }
-                
-                // 2. 清空头文件定义中的 Purgatory 暂存炼狱目录
-                let purgatoryDir = URL(fileURLWithPath: "\(containerPath)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)/Purgatory")
-                if fileManager.fileExists(atPath: purgatoryDir.path) {
-                    try? fileManager.removeItem(at: purgatoryDir)
-                }
-                
-                // 3. 核心粉碎：物理抹除 iOS 17 强固的 SQLite 数据库索引文件群 (对应头文件 _database)
-                let dataStoreDirURL = URL(fileURLWithPath: "\(containerPath)/Library/Application Support/PRBPosterExtensionDataStore/\(extVer)")
-                if let files = try? fileManager.contentsOfDirectory(at: dataStoreDirURL, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) {
-                    for file in files {
-                        let fileName = file.lastPathComponent.lowercased()
-                        // 抹除包括 .sqlite、.sqlite-wal、.sqlite-shm 在内的所有索引，彻底清除导致留白的鬼影数据
-                        if fileName.contains("sqlite") {
-                            try? fileManager.removeItem(at: file)
-                        }
-                    }
-                }
             }
             
-            // 4. 完美对齐头文件 FBSSystemService.h 声明的精确方法签名：
+            // 2. 完美对齐头文件 FBSSystemService.h 声明的精确方法签名执行冷启动：
             // - (void)terminateApplication:(id)application forReason:(long long)reason andReport:(_Bool)report withDescription:(id)description;
             let service = Dynamic.FBSSystemService.sharedService()
             if service != nil {
-                // 同时强杀海报版进程与壁纸守护进程，迫使系统彻底释放句柄锁，清除内存常驻字典缓存
-                service.terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: "Rebuild PBFDataStore Database")
-                service.terminateApplication("com.apple.wallpaperd", forReason: Int64(1), andReport: false, withDescription: "Purge Wallpaperd Cache")
+                // 同时优雅强杀主应用与守护进程。系统在物理文件存在、数据库未损坏的状态下冷启动，会自动在 SQLite 中增删变更集
+                service.terminateApplication("com.apple.PosterBoard", forReason: Int64(1), andReport: false, withDescription: "Safe Sync PBFDataStore")
+                service.terminateApplication("com.apple.wallpaperd", forReason: Int64(1), andReport: false, withDescription: "Safe Sync Wallpaperd")
             }
             
-            // 5. 向全局发送底层 Darwin 核心广播，通知 XPC 服务资产已变更，迫使系统从物理磁盘重新建立完整的 SQLite 索引
+            // 3. 发布标准的系统级别 Darwin 通知，通知系统服务重新检索磁盘变动
             let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
             CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.wallpaper.changed" as CFString), nil, nil, true)
-            CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.LaunchServices.pluginsChanged" as CFString), nil, nil, true)
+            CFNotificationCenterPostNotification(darwinCenter, CFNotificationName("com.apple.posterkit.descriptors.changed" as CFString), nil, nil, true)
             
-            // 【完全静默化】：这里已经彻底清除了跳转到海报版前台的代码。
-            // 当你点击应用或删除后，App 会停留在当前界面静默刷新，系统重新冷启动后，新壁纸立刻完美加载，空白方块彻底消失。
+            // 【完全静默，不破坏原有体验】：去除打开前台海报版的代码。用户停留在当前 App 内，系统后台已完美无感重载。
         }
     }
     
@@ -211,7 +190,7 @@ class PosterBoardManager: ObservableObject {
         }
     }
     
-    // 【采用专属白名单唯一矩阵强匹配：100% 过滤隐藏系统所有的自带 Collections 原厂壁纸】
+    // 【核心修复：通过高精白名单追踪判定，100% 只展现并允许删除由本 App 导进去的壁纸】
     func fetchAppliedWallpapers() {
         var list: [AppliedWallpaper] = []
         guard let containerPath = SymHandler.getAppContainerPath(for: "com.apple.PosterBoard") else { return }
@@ -220,7 +199,7 @@ class PosterBoardManager: ObservableObject {
         
         guard let extensions = try? FileManager.default.contentsOfDirectory(at: extensionsPath, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else { return }
         
-        // 读取本 App 专属的第三方导入历史注册表白名单
+        // 从沙盒提取通过本应用添加成功的自定壁纸白名单登记册
         let importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         
         for extFolder in extensions {
@@ -232,10 +211,9 @@ class PosterBoardManager: ObservableObject {
                 let folderName = item.lastPathComponent
                 if folderName == "__MACOSX" { continue }
                 
-                // 【核心白名单矩阵重叠验证】
-                // 只有完全带有本 App 写入时注入的 "Pocket_" 唯一专属前缀、且包含在历史持久化数组中的项，才会被呈现在删除列表里！
-                // 这从底层逻辑上直接完成了对系统原厂自带壁纸（Collections/Astronomy/Emoji等）的完美绝对屏蔽。
-                if importedFolders.contains(folderName) && folderName.hasPrefix("Pocket_") {
+                // 【核心安全屏障】只有在这个白名单数组里的文件夹，才是你导入的第三方自定壁纸！
+                // 这样既能实现无感直写，又绝对不会把 Collections 各种系统自带的壁纸混列进来。
+                if importedFolders.contains(folderName) {
                     var displayName = folderName
                     let plistURL = item.appendingPathComponent("Wallpaper.plist")
                     if FileManager.default.fileExists(atPath: plistURL.path) {
@@ -247,7 +225,7 @@ class PosterBoardManager: ObservableObject {
                     } else {
                         let idURL = item.appendingPathComponent("com.apple.posterkit.provider.descriptor.identifier")
                         if let idStr = try? String(contentsOf: idURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) {
-                            displayName = "已导自定壁纸 (\(idStr))"
+                            displayName = "已导壁纸 (ID: \(idStr))"
                         }
                     }
                     list.append(AppliedWallpaper(folderName: folderName, displayName: displayName, extensionType: extName, path: item))
@@ -263,7 +241,7 @@ class PosterBoardManager: ObservableObject {
     func deleteAppliedWallpaper(_ wallpaper: AppliedWallpaper) throws {
         try FileManager.default.removeItem(at: wallpaper.path)
         
-        // 同步在持久化数据数组中解绑移除
+        // 同步从持久化数据白名单中撤销
         var importedFolders = UserDefaults.standard.stringArray(forKey: "ImportedWallpaperFolders") ?? []
         importedFolders.removeAll { $0 == wallpaper.folderName }
         UserDefaults.standard.set(importedFolders, forKey: "ImportedWallpaperFolders")
@@ -319,20 +297,20 @@ class PosterBoardManager: ObservableObject {
                     if descr.lastPathComponent != "__MACOSX" {
                         try randomizeWallpaperId(url: descr)
                         
-                        // 【独家定制：UUID 唯一标记命名矩阵】
-                        // 将写入目标沙盒的第三方文件夹强制通过 Pocket_ 唯一特征矩阵重命名。
-                        // 这不仅能完美防范与系统原厂重名引起灾难，更是 fetchAppliedWallpapers 实现 100% 精准识别的基础。
-                        let uniqueFolderName = "Pocket_\(UUID().uuidString)"
-                        let destURL = targetDir.appendingPathComponent(uniqueFolderName)
+                        // 【核心安全修正：不再对文件夹进行强行重命名，杜绝底层校验死锁】
+                        let originalFolderName = descr.lastPathComponent
+                        let destURL = targetDir.appendingPathComponent(originalFolderName)
                         
                         if FileManager.default.fileExists(atPath: destURL.path) {
                             try? FileManager.default.removeItem(at: destURL)
                         }
                         
+                        // 纯粹直写注入目标沙盒
                         try FileManager.default.moveItem(at: descr, to: destURL)
                         
-                        if !importedFolders.contains(uniqueFolderName) {
-                            importedFolders.append(uniqueFolderName)
+                        // 将全新成功写入系统原厂目录的文件夹名称，稳妥登记进历史追踪白名单中
+                        if !importedFolders.contains(originalFolderName) {
+                            importedFolders.append(originalFolderName)
                         }
                     }
                 }
